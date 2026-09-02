@@ -4,6 +4,32 @@
   "description": "Express middleware and session manager for StellarFlow Checkout",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/joshuaodoh122-hub/stellarflow-checkout.git",
+    "directory": "packages/server"
+  },
+  "homepage": "https://github.com/joshuaodoh122-hub/stellarflow-checkout#readme",
+  "bugs": {
+    "url": "https://github.com/joshuaodoh122-hub/stellarflow-checkout/issues"
+  },
+  "keywords": [
+    "stellar",
+    "payments",
+    "checkout",
+    "express",
+    "webhook",
+    "session",
+    "non-custodial"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist *.tsbuildinfo",
@@ -25,6 +51,9 @@
     "typescript": "^5.4.0",
     "supertest": "^6.3.4",
     "@types/supertest": "^6.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   },
   "license": "MIT"
 }
