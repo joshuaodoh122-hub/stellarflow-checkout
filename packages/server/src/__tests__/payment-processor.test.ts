@@ -126,6 +126,32 @@ describe('PaymentProcessor — end-to-end flow', () => {
     const session = await manager.getSession(1n);
     expect(session!.status).toBe('paid'); // not changed
   });
+
+  it('confirms payment on a submitting session (in-browser path)', async () => {
+    // 'submitting' is set by POST /submit before Horizon call.
+    // The SSE listener fires after on-chain confirmation — processor must
+    // still match and mark the session paid.
+    const { store, processor, manager, webhookEvents } = await makeSetup();
+    await store.updateStatus(1n, 'submitting');
+
+    await processor.process(makeEvent());
+
+    const session = await manager.getSession(1n);
+    expect(session!.status).toBe('paid');
+    expect(webhookEvents[0].type).toBe('payment.confirmed');
+  });
+
+  it('does not re-process a submitting session with a duplicate txHash', async () => {
+    const { store, idempotencyStore, processor, manager, webhookEvents } = await makeSetup();
+    await store.updateStatus(1n, 'submitting');
+
+    await processor.process(makeEvent());          // first — marks paid
+    await processor.process(makeEvent());          // duplicate txHash
+
+    expect(webhookEvents).toHaveLength(1);
+    const session = await manager.getSession(1n);
+    expect(session!.status).toBe('paid');
+  });
 });
 
 describe('SessionManager', () => {

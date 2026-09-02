@@ -52,8 +52,11 @@ export class PaymentProcessor {
       return;
     }
 
-    // Only process pending sessions
-    if (session.status !== 'pending') {
+    // Process pending and submitting sessions.
+    // 'submitting' means the tx was sent to Horizon via the in-browser path and
+    // we are waiting for the SSE listener to confirm it on-chain. We must still
+    // run the matcher so the session can be marked paid when the event arrives.
+    if (session.status !== 'pending' && session.status !== 'submitting') {
       return;
     }
 

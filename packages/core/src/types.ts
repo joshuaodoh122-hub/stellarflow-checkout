@@ -19,6 +19,7 @@ export type Asset =
 
 export type PaymentStatus =
   | 'pending'
+  | 'submitting'   // tx sent to wallet for signing and submitted; awaiting on-chain confirmation
   | 'paid'
   | 'expired'
   | 'underpayment'

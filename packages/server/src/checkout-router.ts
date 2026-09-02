@@ -347,7 +347,22 @@ export function createCheckoutRouter(opts: CheckoutRouterOptions): Router {
       }
 
       // ── All checks passed — submit ─────────────────────────────────────────
-      const submitResult = await horizonServer.submitTransaction(tx);
+      // Mark as 'submitting' BEFORE calling Horizon. This is the double-submit
+      // guard: a second concurrent call to this endpoint will now see status
+      // 'submitting' (not 'pending') and be rejected with 409 before it reaches
+      // the XDR validation or Horizon. The window between the status check above
+      // and this write is the only remaining race — acceptable in Node's
+      // single-threaded event loop since no await separates them.
+      await sessionManager.updateStatus(orderIdBig, 'submitting');
+
+      let submitResult: Awaited<ReturnType<typeof horizonServer.submitTransaction>>;
+      try {
+        submitResult = await horizonServer.submitTransaction(tx);
+      } catch (horizonErr) {
+        // Submission failed — roll back to pending so the customer can retry.
+        await sessionManager.updateStatus(orderIdBig, 'pending');
+        throw horizonErr;
+      }
 
       res.json({
         hash: submitResult.hash ?? '',
