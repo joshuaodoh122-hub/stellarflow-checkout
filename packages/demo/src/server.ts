@@ -20,6 +20,7 @@ import cors from 'cors';
 import path from 'path';
 import {
   HorizonPaymentListener,
+  FileCursorStore,
   CoinGeckoPriceSource,
   QuoteService,
   type StellarNetwork,
@@ -40,6 +41,10 @@ const MERCHANT_ADDRESS =
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const ORIGIN_DOMAIN = process.env.ORIGIN_DOMAIN ?? `localhost:${PORT}`;
 const QUOTE_TTL_MS = parseInt(process.env.QUOTE_TTL_MS ?? '180000', 10);
+
+// File used to persist the Horizon cursor across restarts.
+// Override via CURSOR_FILE env var; defaults to a file in the project root.
+const CURSOR_FILE = process.env.CURSOR_FILE ?? path.resolve(__dirname, '../../horizon-cursor.txt');
 
 if (NETWORK !== 'testnet' && NETWORK !== 'mainnet') {
   console.error('STELLAR_NETWORK must be "testnet" or "mainnet"');
@@ -69,22 +74,34 @@ const paymentProcessor = new PaymentProcessor(sessionManager);
 
 // ─── Horizon listener ─────────────────────────────────────────────────────────
 
+// FileCursorStore persists the last-seen Horizon paging_token to disk.
+// On restart the listener resumes from that cursor instead of 'now', so any
+// payments that landed while the server was down are still processed.
+const cursorStore = new FileCursorStore(CURSOR_FILE);
+
 const listener = new HorizonPaymentListener(MERCHANT_ADDRESS, {
   network: NETWORK,
-  cursor: 'now', // only process payments that arrive after server start
+  cursor: 'now', // used only on the very first start (no saved cursor yet)
+  cursorStore,
 });
 
-listener.start(
-  async (event) => {
-    console.log(`[horizon] payment event: tx=${event.txHash} amount=${event.amount} memo=${JSON.stringify(event.memo)}`);
-    await paymentProcessor.process(event);
-  },
-  (err) => {
-    console.error('[horizon] listener error:', err.message);
-  },
-);
+// start() is async — it reads the saved cursor before opening the stream.
+// We await it inside an IIFE so the server doesn't open the SSE stream before
+// the cursor has been loaded (avoids a brief gap on startup).
+(async () => {
+  await listener.start(
+    async (event) => {
+      console.log(`[horizon] payment event: tx=${event.txHash} amount=${event.amount} memo=${JSON.stringify(event.memo)}`);
+      await paymentProcessor.process(event);
+    },
+    (err) => {
+      console.error('[horizon] listener error:', err.message);
+    },
+  );
 
-console.log(`[horizon] Listening for payments to ${MERCHANT_ADDRESS} on ${NETWORK}`);
+  console.log(`[horizon] Listening for payments to ${MERCHANT_ADDRESS} on ${NETWORK}`);
+  console.log(`[horizon] Cursor file: ${CURSOR_FILE}`);
+})();
 
 // ─── Express app ──────────────────────────────────────────────────────────────
 
