@@ -1,0 +1,37 @@
+# render.yaml — One-click deploy of the StellarFlow Checkout demo to Render
+# https://render.com/docs/infrastructure-as-code
+#
+# Usage:
+#   1. Fork or connect this repo to Render
+#   2. Set MERCHANT_ADDRESS in the Render dashboard (Environment tab)
+#   3. Deploy — the demo storefront will be live at your Render URL
+#
+# The CURSOR_FILE is set to /var/data/horizon-cursor.txt on Render's persistent
+# disk so the Horizon cursor survives deploys and restarts.
+
+services:
+  - type: web
+    name: stellarflow-demo
+    runtime: node
+    region: oregon
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: node packages/demo/dist/server.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: STELLAR_NETWORK
+        value: testnet
+      - key: PORT
+        value: "3000"
+      - key: MERCHANT_ADDRESS
+        sync: false          # Set this in the Render dashboard — your testnet G... address
+      - key: CURSOR_FILE
+        value: /var/data/horizon-cursor.txt
+      - key: ORIGIN_DOMAIN
+        sync: false          # Set to your Render URL, e.g. stellarflow-demo.onrender.com
+    disk:
+      name: horizon-cursor
+      mountPath: /var/data
+      sizeGB: 1
