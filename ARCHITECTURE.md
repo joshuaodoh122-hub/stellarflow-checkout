@@ -94,6 +94,63 @@ This is the same process used by most crypto payment processors in v1. Automated
 
 ---
 
+### 5. Cursor persistence for HorizonPaymentListener
+
+**Decision:** Persist the Horizon `paging_token` to a local file after every SSE message via `FileCursorStore`.
+
+**Problem being solved:** With `cursor: 'now'` (the default), any payment that lands while the server is down is silently missed on restart. A dropped response from Horizon does not mean the transaction failed — it means the server didn't see the SSE event. Without a persisted cursor, those events are gone.
+
+**Implementation:**
+- `CursorStore` interface with `load()` / `save()` methods (`packages/core/src/horizon-listener.ts`)
+- `InMemoryCursorStore` — default, no cross-restart durability (useful for tests)
+- `FileCursorStore` — writes the cursor synchronously (`writeFileSync`) to a plain text file after each message so the cursor survives a process crash between the message handler returning and an async write completing
+- `HorizonPaymentListener.start()` is now `async`; it calls `cursorStore.load()` before opening the stream and resumes from the saved cursor if one exists
+- On reconnect (SSE error), the cursor is re-read from the store so the reconnect also resumes from the last safe position rather than re-opening at `opts.cursor`
+- Demo wires `FileCursorStore` with path configurable via `CURSOR_FILE` env var (default: `horizon-cursor.txt` in the project root)
+
+**Why synchronous write:** The cursor file is a single short string (< 30 bytes). `writeFileSync` flushes before the message handler returns, ensuring the cursor is durable even if the process is killed immediately after. The sync cost is negligible for this payload size.
+
+---
+
+## Known gaps / post-MVP follow-ups
+
+These gaps are real but are not blockers for the MVP testnet demo. They are tracked here for the next iteration.
+
+### Gap 1 — Stuck-session expiry transition
+
+**Problem:** A session stuck in `submitting` status past its `expiresAt` timestamp stays `submitting` forever. It should transition to `expired` so the merchant and customer get a clear signal.
+
+**Current behaviour:** The `/checkout/:orderId` GET endpoint returns `status: submitting` even after `expiresAt` has passed.
+
+**Minimal fix (post-MVP):** In the GET handler, add a check before returning:
+```ts
+if (session.status === 'submitting' && Date.now() > session.expiresAt) {
+  await sessionManager.updateStatus(session.orderId, 'expired');
+  session = { ...session, status: 'expired' };
+}
+```
+A more complete fix also stores the `txHash` on the session at submission time and queries Horizon for it before deciding whether to expire or mark paid — this handles the case where the transaction actually landed but the server never received the SSE confirmation.
+
+### Gap 2 — Background sweep for unqueried stuck sessions
+
+**Problem:** The on-demand reconcile in Gap 1 only fires when the order is next polled. If no one queries a stuck session (e.g. the customer abandoned the tab), the session stays in `submitting` indefinitely. This inflates the "active" session count and could prevent the idempotency store from being cleaned up correctly.
+
+**Minimal fix (post-MVP):** A `setInterval` sweep in `server.ts` that runs every 60 seconds, calls `sessionManager.listSessions()`, and transitions any `submitting` session past `expiresAt` to `expired`:
+```ts
+setInterval(async () => {
+  const sessions = await sessionManager.listSessions();
+  const now = Date.now();
+  for (const s of sessions) {
+    if (s.status === 'submitting' && now > s.expiresAt) {
+      await sessionManager.updateStatus(s.orderId, 'expired');
+    }
+  }
+}, 60_000);
+```
+This sweep intentionally does not query Horizon for each `txHash` — that would be N Horizon calls per sweep cycle. The correct approach is to store the `txHash` at submission time (see Gap 1) and only query Horizon if the hash is present.
+
+---
+
 ## System Architecture
 
 ```
@@ -127,13 +184,14 @@ This is the same process used by most crypto payment processors in v1. Automated
                                     ┌────────────────────────┐
                                     │  Horizon SSE stream    │
                                     │  /accounts/{addr}/     │
-                                    │  payments?cursor=now   │
+                                    │  payments?cursor=<N>   │
                                     └────────────┬───────────┘
                                                  │
                                                  ▼
                                     ┌────────────────────────┐
                                     │  HorizonPaymentListener│
                                     │  parseHorizonRecord()  │
+                                    │  + FileCursorStore     │◀── horizon-cursor.txt
                                     └────────────┬───────────┘
                                                  │ PaymentEvent
                                                  ▼
@@ -246,3 +304,5 @@ These are explicitly out of scope for v1 but should be tracked as GitHub issues:
 | Persistent storage | SQLite/Postgres SessionStore and IdempotencyStore implementations |
 | Webhook signing | HMAC-SHA256 signature header for webhook security |
 | Dashboard UI | Merchant review queue for flagged payments |
+| Stuck-session expiry | Transition `submitting` sessions to `expired` after `expiresAt` (see Known gaps above) |
+| Background sweep | Periodic sweep to resolve stuck `submitting` sessions without a query trigger (see Known gaps above) |
