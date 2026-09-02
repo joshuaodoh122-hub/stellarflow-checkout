@@ -19,7 +19,13 @@
  */
 
 import { Router, type Request, type Response } from 'express';
-import { Horizon as StellarHorizon, TransactionBuilder } from 'stellar-sdk';
+import {
+  Horizon as StellarHorizon,
+  TransactionBuilder,
+  Operation,
+  Asset as StellarAsset,
+  Memo,
+} from 'stellar-sdk';
 import {
   sessionToSep0007Uri,
   renderQr,
@@ -215,15 +221,24 @@ export function createCheckoutRouter(opts: CheckoutRouterOptions): Router {
   // ─── POST /api/checkout/:orderId/submit ───────────────────────────────────
 
   /**
-   * Submit a signed transaction XDR to Horizon.
+   * Validate and submit a signed transaction XDR to Horizon.
    *
    * Body: { signedTxXdr: string }
    *
-   * The widget calls this after the customer has signed the transaction with
-   * their wallet via the kit. We forward to Horizon and return the result.
-   * Payment confirmation still happens via the Horizon SSE listener (not here)
-   * — this endpoint is purely a submission proxy so the widget doesn't need
-   * to know the Horizon URL.
+   * Before forwarding to Horizon the endpoint VALIDATES that the parsed
+   * transaction's operations actually match the checkout session:
+   *   - Exactly one payment operation
+   *   - Destination matches session.destination
+   *   - Asset matches session.asset (code + issuer)
+   *   - Amount matches session.amount (exact string comparison after normalisation)
+   *   - MEMO_ID matches session.orderId
+   *
+   * Rejection here is a hard 400 — the XDR is discarded, nothing is submitted
+   * to the network. This prevents an attacker who crafts a request directly to
+   * this endpoint from getting an unrelated transaction forwarded on their behalf.
+   *
+   * Note: the non-custodial invariant is still intact — the server never signs
+   * anything. We only validate that the customer signed what we asked them to sign.
    */
   router.post('/checkout/:orderId/submit', async (req: Request, res: Response) => {
     try {
@@ -244,9 +259,94 @@ export function createCheckoutRouter(opts: CheckoutRouterOptions): Router {
         res.status(404).json({ error: 'Session not found' });
         return;
       }
+      if (session.status !== 'pending') {
+        res.status(409).json({ error: `Session is ${session.status}, not pending` });
+        return;
+      }
+      if (Date.now() > session.expiresAt) {
+        res.status(410).json({ error: 'Session quote has expired' });
+        return;
+      }
 
-      // Submit to Horizon — deserialize the signed XDR first
-      const tx = TransactionBuilder.fromXDR(signedTxXdr, NETWORK_PASSPHRASES[network]);
+      // ── Deserialise ────────────────────────────────────────────────────────
+      let tx: ReturnType<typeof TransactionBuilder.fromXDR>;
+      try {
+        tx = TransactionBuilder.fromXDR(signedTxXdr, NETWORK_PASSPHRASES[network]);
+      } catch {
+        res.status(400).json({ error: 'Invalid transaction XDR' });
+        return;
+      }
+
+      // FeeBump transactions cannot be StellarFlow payment txs
+      if (!('memo' in tx)) {
+        res.status(400).json({ error: 'FeeBump transactions are not accepted' });
+        return;
+      }
+
+      // ── Validate memo ──────────────────────────────────────────────────────
+      const memo = tx.memo;
+      const expectedMemoId = session.orderId.toString();
+      if (
+        !(memo instanceof Memo) ||
+        memo.type !== 'id' ||
+        memo.value !== expectedMemoId
+      ) {
+        res.status(400).json({
+          error: `Transaction memo mismatch: expected MEMO_ID ${expectedMemoId}, got type=${memo?.type} value=${memo?.value}`,
+        });
+        return;
+      }
+
+      // ── Validate operations ────────────────────────────────────────────────
+      const ops = tx.operations;
+      if (ops.length !== 1) {
+        res.status(400).json({
+          error: `Transaction must have exactly 1 operation, got ${ops.length}`,
+        });
+        return;
+      }
+
+      const op = ops[0];
+      if (op.type !== 'payment') {
+        res.status(400).json({
+          error: `Expected payment operation, got ${op.type}`,
+        });
+        return;
+      }
+
+      const paymentOp = op as Operation.Payment;
+
+      // Validate destination
+      if (paymentOp.destination !== session.destination) {
+        res.status(400).json({
+          error: `Transaction destination mismatch: expected ${session.destination}`,
+        });
+        return;
+      }
+
+      // Validate asset
+      const expectedAsset =
+        session.asset.code === 'XLM'
+          ? StellarAsset.native()
+          : new StellarAsset(session.asset.code, session.asset.issuer);
+
+      if (!paymentOp.asset.equals(expectedAsset)) {
+        res.status(400).json({
+          error: `Transaction asset mismatch: expected ${expectedAsset.getCode()}`,
+        });
+        return;
+      }
+
+      // Validate amount — normalise to 7dp for comparison
+      const normalise = (s: string) => parseFloat(s).toFixed(7);
+      if (normalise(paymentOp.amount) !== normalise(session.amount)) {
+        res.status(400).json({
+          error: `Transaction amount mismatch: expected ${session.amount}, got ${paymentOp.amount}`,
+        });
+        return;
+      }
+
+      // ── All checks passed — submit ─────────────────────────────────────────
       const submitResult = await horizonServer.submitTransaction(tx);
 
       res.json({
@@ -255,7 +355,6 @@ export function createCheckoutRouter(opts: CheckoutRouterOptions): Router {
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      // Horizon submission errors (tx_bad_seq, tx_insufficient_fee, etc.)
       if (message.includes('transaction') || message.includes('horizon')) {
         res.status(400).json({ error: `Transaction submission failed: ${message}` });
         return;
