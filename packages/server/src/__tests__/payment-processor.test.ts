@@ -142,7 +142,7 @@ describe('PaymentProcessor — end-to-end flow', () => {
   });
 
   it('does not re-process a submitting session with a duplicate txHash', async () => {
-    const { store, idempotencyStore, processor, manager, webhookEvents } = await makeSetup();
+    const { store, processor, manager, webhookEvents } = await makeSetup();
     await store.updateStatus(1n, 'submitting');
 
     await processor.process(makeEvent());          // first — marks paid
