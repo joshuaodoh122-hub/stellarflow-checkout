@@ -28,7 +28,7 @@ The missing piece is a drop-in checkout widget that works without a custodian, w
 2. The widget calls the merchant's backend to create a checkout session with a quoted price.
 3. A [SEP-0007](https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0007.md) payment URI is generated — the Stellar standard for payment requests. This produces both a QR code (for mobile wallets) and a deep link (for browser extensions).
 4. The customer pays via any SEP-0007-compatible wallet: Freighter, Lobstr, xBull, Albedo, Solar.
-5. The merchant backend listens to Horizon's SSE stream for payments to their address. When one arrives, it matches the payment by **memo ID** (the order's unique numeric ID) and validates amount, asset, and quote expiry.
+5. The merchant backend listens to Horizon's SSE stream for payments to their address. The last-seen cursor is persisted to disk so any payment that arrives while the server is temporarily down is still processed on restart — not silently missed. When a payment arrives, it is matched by **memo ID** (the order's unique numeric ID) and validated against amount, asset, and quote expiry.
 6. The widget polls for status and shows a success screen when the payment is confirmed.
 
 Funds go **directly from the customer's wallet to the merchant's wallet**. StellarFlow never holds, pools, or has signing authority over any funds.
@@ -44,6 +44,7 @@ Key decisions:
 - **Price source:** CoinGecko free tier with a 3-minute expiry window. USDC is treated as exactly $1.00. The `PriceSource` interface makes it swappable for an on-chain oracle (e.g. Reflector on Soroban).
 - **Review flow:** Webhook callbacks. Underpayments, wrong-asset payments, and expired-quote payments are flagged for merchant review — never silently accepted.
 - **Refunds:** Manual (see ARCHITECTURE.md). Automated refunds would require server-side signing authority over merchant funds — a violation of the non-custodial invariant.
+- **Cursor persistence:** The Horizon SSE cursor (`paging_token`) is saved to disk after every message via `FileCursorStore`. On restart, the listener resumes from the last saved cursor instead of `now`, closing the gap where payments that land during a server downtime would otherwise be missed.
 
 ---
 
@@ -83,6 +84,18 @@ cd packages/demo && npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) to see the demo storefront.
+
+On startup you will see a line like:
+
+```
+[horizon] Cursor file: /path/to/stellarflow-checkout/horizon-cursor.txt
+```
+
+This file persists the Horizon cursor across restarts. You can change its location with the `CURSOR_FILE` env var in your `.env`:
+
+```
+CURSOR_FILE=/var/data/stellarflow/horizon-cursor.txt
+```
 
 ### Embed the widget
 
@@ -130,6 +143,28 @@ manager.onWebhook((event) => {
 });
 ```
 
+### Using `HorizonPaymentListener` directly
+
+`start()` is async — it loads the saved cursor from the store before opening the SSE stream. Always `await` it:
+
+```typescript
+import { HorizonPaymentListener, FileCursorStore } from '@stellarflow/core';
+
+const listener = new HorizonPaymentListener(merchantAddress, {
+  network: 'testnet',
+  cursor: 'now',                              // fallback used only on first start
+  cursorStore: new FileCursorStore('./horizon-cursor.txt'),
+});
+
+// Must be awaited — loads the saved cursor before the stream opens
+await listener.start(
+  async (event) => { /* handle PaymentEvent */ },
+  (err) => { console.error(err); },
+);
+```
+
+If you omit `cursorStore`, `InMemoryCursorStore` is used by default (cursor lost on restart — fine for tests, not for production).
+
 ---
 
 ## Switching to mainnet
@@ -170,4 +205,4 @@ See [SECURITY.md](SECURITY.md) for vulnerability reporting and security design.
 
 ## License
 
-[MIT](LICENSE) — Copyright (c) 2024 StellarFlow Checkout Contributors
+[MIT](LICENSE) — Copyright (c) 2026 StellarFlow Checkout Contributors
