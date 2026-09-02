@@ -125,6 +125,15 @@ export class SessionManager {
   }
 
   /**
+   * Update a session's status directly. Used by the submit endpoint to
+   * transition to 'submitting' before calling Horizon, and to roll back to
+   * 'pending' if Horizon rejects the transaction.
+   */
+  async updateStatus(orderId: bigint, status: PaymentStatus): Promise<void> {
+    await this.store.updateStatus(orderId, status);
+  }
+
+  /**
    * Mark a session as paid and fire the payment.confirmed webhook.
    */
   async markPaid(orderId: bigint, txHash: string): Promise<void> {
