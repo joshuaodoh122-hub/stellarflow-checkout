@@ -14,6 +14,17 @@
  *     (memo-matcher.ts), NOT here. The listener's job is purely to parse
  *     and emit events.
  *
+ * Cursor persistence:
+ *   - On every incoming message the listener writes the paging_token to the
+ *     CursorStore so a restart resumes from where it left off rather than
+ *     replaying from 'now' (which would silently miss events that landed
+ *     while the server was down).
+ *   - The default InMemoryCursorStore keeps the cursor in process memory
+ *     only — useful for tests and single-process deployments that don't
+ *     need cross-restart durability.
+ *   - FileCursorStore persists the cursor to a local file. Pass one to
+ *     HorizonPaymentListener when you need durability across restarts.
+ *
  * stellar-sdk v12 type notes:
  *   OperationResponseType enum values:
  *     payment                  → 'payment'
@@ -28,6 +39,8 @@
  *   unknown to work around this known SDK type inconsistency.
  */
 
+import fs from 'fs';
+import path from 'path';
 import { Horizon } from 'stellar-sdk';
 import type { PaymentEvent, Asset, StellarNetwork } from './types';
 import { HORIZON_URLS } from './types';
@@ -35,14 +48,92 @@ import { HORIZON_URLS } from './types';
 export type PaymentEventHandler = (event: PaymentEvent) => void | Promise<void>;
 export type ErrorHandler = (err: Error) => void;
 
+// ─── CursorStore ──────────────────────────────────────────────────────────────
+
+/**
+ * Stores and retrieves the Horizon paging_token (cursor) so the listener can
+ * resume from the correct position after a restart.
+ *
+ * Implementations must be safe to call concurrently (Node's event loop makes
+ * this trivial for the in-memory and file variants — writes are synchronous or
+ * awaited one at a time in the message handler).
+ */
+export interface CursorStore {
+  /** Return the last saved cursor, or null if none has been saved yet. */
+  load(): Promise<string | null>;
+  /** Persist the cursor returned from the most recent Horizon message. */
+  save(cursor: string): Promise<void>;
+}
+
+/**
+ * In-memory cursor store. The cursor is lost when the process exits.
+ * Useful for tests and short-lived scripts where cross-restart durability
+ * is not needed.
+ */
+export class InMemoryCursorStore implements CursorStore {
+  private cursor: string | null = null;
+
+  async load(): Promise<string | null> {
+    return this.cursor;
+  }
+
+  async save(cursor: string): Promise<void> {
+    this.cursor = cursor;
+  }
+}
+
+/**
+ * File-backed cursor store. Writes the cursor as a plain UTF-8 string to
+ * `filePath` on every Horizon message so a restart can resume from the
+ * last seen paging_token.
+ *
+ * The write is synchronous (writeFileSync) to ensure the cursor is flushed
+ * before the process can be killed between the message handler returning and
+ * a subsequent async write completing. The file is small (< 30 bytes), so
+ * the sync write does not block the event loop in any meaningful way.
+ *
+ * The directory containing `filePath` must already exist.
+ */
+export class FileCursorStore implements CursorStore {
+  private readonly filePath: string;
+
+  constructor(filePath: string) {
+    this.filePath = path.resolve(filePath);
+  }
+
+  async load(): Promise<string | null> {
+    try {
+      const cursor = fs.readFileSync(this.filePath, 'utf8').trim();
+      return cursor.length > 0 ? cursor : null;
+    } catch (err: unknown) {
+      // ENOENT means no cursor has been saved yet — start fresh
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    }
+  }
+
+  async save(cursor: string): Promise<void> {
+    fs.writeFileSync(this.filePath, cursor, 'utf8');
+  }
+}
+
 export interface HorizonListenerOptions {
   network: StellarNetwork;
-  /** Starting cursor. 'now' = only new txs; '0' = all history. Default: 'now' */
+  /**
+   * Starting cursor used only when no saved cursor is found in the store.
+   * 'now' = only new txs; '0' = full history replay. Default: 'now'.
+   */
   cursor?: string;
   /** Base reconnect delay in ms. Default: 1000 */
   reconnectBaseMs?: number;
   /** Max reconnect delay in ms. Default: 30000 */
   reconnectMaxMs?: number;
+  /**
+   * Cursor store for persisting the Horizon paging_token across restarts.
+   * Defaults to InMemoryCursorStore (no cross-restart durability).
+   * Pass a FileCursorStore (or your own implementation) to survive restarts.
+   */
+  cursorStore?: CursorStore;
 }
 
 // ─── Operation type strings ───────────────────────────────────────────────────
@@ -150,6 +241,7 @@ export class HorizonPaymentListener {
       cursor: opts.cursor ?? 'now',
       reconnectBaseMs: opts.reconnectBaseMs ?? 1000,
       reconnectMaxMs: opts.reconnectMaxMs ?? 30_000,
+      cursorStore: opts.cursorStore ?? new InMemoryCursorStore(),
     };
     this.server = new Horizon.Server(HORIZON_URLS[opts.network]);
   }
@@ -157,11 +249,21 @@ export class HorizonPaymentListener {
   /**
    * Start listening. Calls onPayment for each incoming payment event.
    * Automatically reconnects on error with exponential backoff.
+   *
+   * On startup the listener checks the CursorStore for a previously saved
+   * cursor and resumes from that position. If none is found it falls back to
+   * the `cursor` option ('now' by default).
    */
-  start(onPayment: PaymentEventHandler, onError?: ErrorHandler): void {
+  async start(onPayment: PaymentEventHandler, onError?: ErrorHandler): Promise<void> {
     if (this.running) return;
     this.running = true;
-    this.subscribe(onPayment, onError, 0);
+
+    // Restore the last saved cursor so we resume from where we left off.
+    // Falls back to opts.cursor ('now' by default) if no cursor is stored yet.
+    const savedCursor = await this.opts.cursorStore.load();
+    const startCursor = savedCursor ?? this.opts.cursor;
+
+    this.subscribe(startCursor, onPayment, onError, 0);
   }
 
   /** Stop the listener. */
@@ -174,13 +276,14 @@ export class HorizonPaymentListener {
   }
 
   private subscribe(
+    startCursor: string,
     onPayment: PaymentEventHandler,
     onError: ErrorHandler | undefined,
     retryCount: number,
   ): void {
     if (!this.running) return;
 
-    let cursor = this.opts.cursor;
+    let cursor = startCursor;
 
     // The SDK types stream()'s onmessage as receiving CollectionPage<T>, but at
     // runtime it delivers individual OperationRecord objects. We cast via unknown.
@@ -191,7 +294,14 @@ export class HorizonPaymentListener {
       .stream({
         onmessage: async (record: unknown) => {
           const rec = record as { paging_token?: string };
-          cursor = rec.paging_token ?? cursor;
+          if (rec.paging_token) {
+            cursor = rec.paging_token;
+            // Persist the cursor so a restart resumes from this position.
+            // We fire-and-forget but catch so a store error never crashes the handler.
+            this.opts.cursorStore.save(cursor).catch((err: unknown) => {
+              console.error('[horizon-listener] cursor save error:', err);
+            });
+          }
 
           // Fetch transaction details to get memo
           let memoType: string | undefined;
@@ -231,7 +341,16 @@ export class HorizonPaymentListener {
             this.opts.reconnectBaseMs * Math.pow(2, retryCount),
             this.opts.reconnectMaxMs,
           );
-          setTimeout(() => this.subscribe(onPayment, onError, retryCount + 1), delay);
+          // On reconnect, resume from the last cursor we successfully processed
+          // (persisted in the store) rather than opts.cursor.
+          this.opts.cursorStore.load()
+            .then((saved) => {
+              const resumeCursor = saved ?? this.opts.cursor;
+              setTimeout(() => this.subscribe(resumeCursor, onPayment, onError, retryCount + 1), delay);
+            })
+            .catch(() => {
+              setTimeout(() => this.subscribe(cursor, onPayment, onError, retryCount + 1), delay);
+            });
         },
       });
 
