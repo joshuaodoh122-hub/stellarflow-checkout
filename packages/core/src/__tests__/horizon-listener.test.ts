@@ -1,7 +1,8 @@
 /**
  * horizon-listener.test.ts
  *
- * Tests for the Horizon record parser (pure unit tests, no network calls).
+ * Tests for the Horizon record parser (pure unit tests, no network calls)
+ * and the CursorStore implementations.
  *
  * stellar-sdk v12 naming:
  *   'payment'                  → standard payment
@@ -9,7 +10,14 @@
  *   'path_payment_strict_send' → path payment strict send
  */
 
-import { parseHorizonRecord } from '../horizon-listener';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import {
+  parseHorizonRecord,
+  InMemoryCursorStore,
+  FileCursorStore,
+} from '../horizon-listener';
 import type { Horizon } from 'stellar-sdk';
 
 const MERCHANT = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
@@ -33,6 +41,8 @@ function makePaymentRecord(
     ...overrides,
   } as unknown as Horizon.ServerApi.OperationRecord;
 }
+
+// ─── parseHorizonRecord ───────────────────────────────────────────────────────
 
 describe('parseHorizonRecord', () => {
   it('parses a native XLM payment', () => {
@@ -149,5 +159,92 @@ describe('parseHorizonRecord', () => {
     const record = makePaymentRecord();
     const event = parseHorizonRecord(record, undefined, undefined, '2024-01-01T00:00:00Z');
     expect(event!.createdAt).toBe(1704067200);
+  });
+});
+
+// ─── InMemoryCursorStore ──────────────────────────────────────────────────────
+
+describe('InMemoryCursorStore', () => {
+  it('returns null before any cursor has been saved', async () => {
+    const store = new InMemoryCursorStore();
+    expect(await store.load()).toBeNull();
+  });
+
+  it('returns the saved cursor after save()', async () => {
+    const store = new InMemoryCursorStore();
+    await store.save('12345678901234567');
+    expect(await store.load()).toBe('12345678901234567');
+  });
+
+  it('overwrites the cursor on a second save()', async () => {
+    const store = new InMemoryCursorStore();
+    await store.save('111');
+    await store.save('999');
+    expect(await store.load()).toBe('999');
+  });
+
+  it('each instance has independent state', async () => {
+    const a = new InMemoryCursorStore();
+    const b = new InMemoryCursorStore();
+    await a.save('aaa');
+    expect(await b.load()).toBeNull();
+  });
+});
+
+// ─── FileCursorStore ──────────────────────────────────────────────────────────
+
+describe('FileCursorStore', () => {
+  let tmpDir: string;
+  let cursorFile: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stellarflow-test-'));
+    cursorFile = path.join(tmpDir, 'cursor.txt');
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns null when the cursor file does not exist yet', async () => {
+    const store = new FileCursorStore(cursorFile);
+    expect(await store.load()).toBeNull();
+  });
+
+  it('saves and restores a cursor across store instances', async () => {
+    // Simulates a restart: write with one instance, read with another
+    const writer = new FileCursorStore(cursorFile);
+    await writer.save('12345678901234567');
+
+    const reader = new FileCursorStore(cursorFile);
+    expect(await reader.load()).toBe('12345678901234567');
+  });
+
+  it('overwrites the cursor on a second save()', async () => {
+    const store = new FileCursorStore(cursorFile);
+    await store.save('111');
+    await store.save('999');
+    expect(await store.load()).toBe('999');
+  });
+
+  it('trims whitespace when loading', async () => {
+    // Simulate a file written with a trailing newline
+    fs.writeFileSync(cursorFile, '12345\n', 'utf8');
+    const store = new FileCursorStore(cursorFile);
+    expect(await store.load()).toBe('12345');
+  });
+
+  it('returns null for a file containing only whitespace', async () => {
+    fs.writeFileSync(cursorFile, '   \n', 'utf8');
+    const store = new FileCursorStore(cursorFile);
+    expect(await store.load()).toBeNull();
+  });
+
+  it('resolves relative paths correctly', async () => {
+    // FileCursorStore should resolve the path from cwd, not throw
+    const relativePath = path.relative(process.cwd(), cursorFile);
+    const store = new FileCursorStore(relativePath);
+    await store.save('abc');
+    expect(await store.load()).toBe('abc');
   });
 });
