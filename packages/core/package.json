@@ -4,6 +4,33 @@
   "description": "Core logic: memo matching, idempotency, price quoting, SEP-0007, Horizon listener",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/joshuaodoh122-hub/stellarflow-checkout.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/joshuaodoh122-hub/stellarflow-checkout#readme",
+  "bugs": {
+    "url": "https://github.com/joshuaodoh122-hub/stellarflow-checkout/issues"
+  },
+  "keywords": [
+    "stellar",
+    "payments",
+    "checkout",
+    "web3",
+    "non-custodial",
+    "xlm",
+    "usdc",
+    "sep0007"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist *.tsbuildinfo",
@@ -21,6 +48,9 @@
     "ts-jest": "^29.1.0",
     "@types/jest": "^29.5.0",
     "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   },
   "license": "MIT"
 }
