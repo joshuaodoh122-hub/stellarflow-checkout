@@ -4,17 +4,22 @@
  * Express router exposing the StellarFlow Checkout API.
  *
  * Endpoints:
- *   POST /api/checkout          Create a checkout session + get SEP-0007 URI + QR
- *   GET  /api/checkout/:orderId  Poll session status
- *   GET  /api/sessions           List all sessions (demo/merchant dashboard)
+ *   POST /api/checkout                  Create a checkout session + SEP-0007 URI + QR
+ *   GET  /api/checkout/:orderId          Poll session status
+ *   POST /api/checkout/:orderId/tx       Build unsigned payment tx for in-browser signing
+ *   POST /api/checkout/:orderId/submit   Submit a signed tx XDR to Horizon
+ *   GET  /api/sessions                   List all sessions (demo/merchant dashboard)
  *
  * Security notes:
  *   - All responses set Content-Type: application/json
  *   - orderId is parsed as BigInt to prevent integer overflow on 64-bit IDs
  *   - Input validation is explicit — no silent coercions
+ *   - The /tx endpoint never receives or stores private keys — it only builds
+ *     an unsigned transaction envelope. Signing happens entirely in the browser.
  */
 
 import { Router, type Request, type Response } from 'express';
+import { Horizon as StellarHorizon, TransactionBuilder } from 'stellar-sdk';
 import {
   sessionToSep0007Uri,
   renderQr,
@@ -22,8 +27,11 @@ import {
   type Asset,
   type StellarNetwork,
   USDC_ISSUERS,
+  HORIZON_URLS,
+  NETWORK_PASSPHRASES,
 } from '@stellarflow/core';
 import type { SessionManager } from './session-manager';
+import { buildPaymentTx } from './tx-builder';
 
 export interface CheckoutRouterOptions {
   sessionManager: SessionManager;
@@ -37,9 +45,25 @@ export function createCheckoutRouter(opts: CheckoutRouterOptions): Router {
   const router = Router();
   const { sessionManager, quoteService, merchantAddress, network, originDomain } = opts;
 
+  // Horizon server instance — shared for tx submission
+  const horizonServer = new StellarHorizon.Server(HORIZON_URLS[network]);
+
+  // ─── Helper: parse orderId param ───────────────────────────────────────────
+
+  function parseOrderId(raw: string): bigint | null {
+    try {
+      return BigInt(raw);
+    } catch {
+      return null;
+    }
+  }
+
+  // ─── POST /api/checkout ────────────────────────────────────────────────────
+
   /**
-   * POST /api/checkout
+   * Create a checkout session.
    * Body: { fiatAmount: number, assetCode: 'XLM' | 'USDC', label?: string }
+   * Returns: session details + SEP-0007 URI + QR code data URLs.
    */
   router.post('/checkout', async (req: Request, res: Response) => {
     try {
@@ -49,27 +73,21 @@ export function createCheckoutRouter(opts: CheckoutRouterOptions): Router {
         label?: unknown;
       };
 
-      // Validate inputs
       if (typeof fiatAmount !== 'number' || fiatAmount <= 0) {
         res.status(400).json({ error: 'fiatAmount must be a positive number' });
         return;
       }
-
       if (assetCode !== 'XLM' && assetCode !== 'USDC') {
         res.status(400).json({ error: "assetCode must be 'XLM' or 'USDC'" });
         return;
       }
 
-      // Get price quote
       const quote = await quoteService.quote(fiatAmount, assetCode);
-
-      // Build asset descriptor
       const asset: Asset =
         assetCode === 'USDC'
           ? { code: 'USDC', issuer: USDC_ISSUERS[network] }
           : { code: 'XLM' };
 
-      // Create session
       const session = await sessionManager.createSession({
         asset,
         amount: quote.cryptoAmount,
@@ -79,7 +97,6 @@ export function createCheckoutRouter(opts: CheckoutRouterOptions): Router {
         label: typeof label === 'string' ? label : undefined,
       });
 
-      // Generate SEP-0007 URI and QR
       const sep0007Uri = sessionToSep0007Uri(session, { originDomain });
       const qr = await renderQr(sep0007Uri);
 
@@ -102,22 +119,17 @@ export function createCheckoutRouter(opts: CheckoutRouterOptions): Router {
         },
       });
     } catch (err) {
-      console.error('[checkout] POST /api/checkout error:', err);
+      console.error('[checkout] POST /checkout error:', err);
       res.status(500).json({ error: 'Internal server error' });
     }
   });
 
-  /**
-   * GET /api/checkout/:orderId
-   * Returns the current status of a checkout session.
-   */
+  // ─── GET /api/checkout/:orderId ────────────────────────────────────────────
+
   router.get('/checkout/:orderId', async (req: Request, res: Response) => {
     try {
-      const { orderId } = req.params;
-      let orderIdBig: bigint;
-      try {
-        orderIdBig = BigInt(orderId);
-      } catch {
+      const orderIdBig = parseOrderId(req.params.orderId);
+      if (orderIdBig === null) {
         res.status(400).json({ error: 'Invalid orderId' });
         return;
       }
@@ -137,15 +149,124 @@ export function createCheckoutRouter(opts: CheckoutRouterOptions): Router {
         amount: session.amount,
       });
     } catch (err) {
-      console.error('[checkout] GET /api/checkout/:orderId error:', err);
+      console.error('[checkout] GET /checkout/:orderId error:', err);
       res.status(500).json({ error: 'Internal server error' });
     }
   });
 
+  // ─── POST /api/checkout/:orderId/tx ───────────────────────────────────────
+
   /**
-   * GET /api/sessions
-   * List all sessions (for merchant dashboard / demo).
+   * Build an unsigned Stellar payment transaction for in-browser wallet signing.
+   *
+   * Body: { customerAddress: string }
+   *
+   * Returns: { txXdr, networkPassphrase }
+   *
+   * The widget passes txXdr to StellarWalletsKit.signTransaction(), then submits
+   * the signed XDR back via POST /api/checkout/:orderId/submit.
+   *
+   * This endpoint NEVER receives a private key. It only builds and returns an
+   * unsigned transaction envelope — the non-custodial invariant is preserved.
    */
+  router.post('/checkout/:orderId/tx', async (req: Request, res: Response) => {
+    try {
+      const orderIdBig = parseOrderId(req.params.orderId);
+      if (orderIdBig === null) {
+        res.status(400).json({ error: 'Invalid orderId' });
+        return;
+      }
+
+      const { customerAddress } = req.body as { customerAddress?: unknown };
+      if (typeof customerAddress !== 'string' || !customerAddress.startsWith('G')) {
+        res.status(400).json({ error: 'customerAddress must be a valid Stellar public key (G...)' });
+        return;
+      }
+
+      const session = await sessionManager.getSession(orderIdBig);
+      if (!session) {
+        res.status(404).json({ error: 'Session not found' });
+        return;
+      }
+      if (session.status !== 'pending') {
+        res.status(409).json({ error: `Session is ${session.status}, not pending` });
+        return;
+      }
+      if (Date.now() > session.expiresAt) {
+        res.status(410).json({ error: 'Session quote has expired' });
+        return;
+      }
+
+      const result = await buildPaymentTx(session, customerAddress, network);
+
+      res.json(result);
+    } catch (err) {
+      // Horizon account not found is a common user error — give a clearer message
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes('Not Found') || message.includes('404')) {
+        res.status(400).json({ error: 'Customer Stellar account not found or not funded' });
+        return;
+      }
+      console.error('[checkout] POST /checkout/:orderId/tx error:', err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // ─── POST /api/checkout/:orderId/submit ───────────────────────────────────
+
+  /**
+   * Submit a signed transaction XDR to Horizon.
+   *
+   * Body: { signedTxXdr: string }
+   *
+   * The widget calls this after the customer has signed the transaction with
+   * their wallet via the kit. We forward to Horizon and return the result.
+   * Payment confirmation still happens via the Horizon SSE listener (not here)
+   * — this endpoint is purely a submission proxy so the widget doesn't need
+   * to know the Horizon URL.
+   */
+  router.post('/checkout/:orderId/submit', async (req: Request, res: Response) => {
+    try {
+      const orderIdBig = parseOrderId(req.params.orderId);
+      if (orderIdBig === null) {
+        res.status(400).json({ error: 'Invalid orderId' });
+        return;
+      }
+
+      const { signedTxXdr } = req.body as { signedTxXdr?: unknown };
+      if (typeof signedTxXdr !== 'string' || !signedTxXdr) {
+        res.status(400).json({ error: 'signedTxXdr is required' });
+        return;
+      }
+
+      const session = await sessionManager.getSession(orderIdBig);
+      if (!session) {
+        res.status(404).json({ error: 'Session not found' });
+        return;
+      }
+
+      // Submit to Horizon — deserialize the signed XDR first
+      const tx = TransactionBuilder.fromXDR(signedTxXdr, NETWORK_PASSPHRASES[network]);
+      const submitResult = await horizonServer.submitTransaction(tx);
+
+      res.json({
+        hash: submitResult.hash ?? '',
+        ledger: (submitResult as { ledger?: number }).ledger ?? null,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // Horizon submission errors (tx_bad_seq, tx_insufficient_fee, etc.)
+      if (message.includes('transaction') || message.includes('horizon')) {
+        res.status(400).json({ error: `Transaction submission failed: ${message}` });
+        return;
+      }
+      console.error('[checkout] POST /checkout/:orderId/submit error:', err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // ─── GET /api/sessions ────────────────────────────────────────────────────
+
   router.get('/sessions', async (_req: Request, res: Response) => {
     try {
       const sessions = await sessionManager.listSessions();
@@ -161,9 +282,23 @@ export function createCheckoutRouter(opts: CheckoutRouterOptions): Router {
         })),
       });
     } catch (err) {
-      console.error('[checkout] GET /api/sessions error:', err);
+      console.error('[checkout] GET /sessions error:', err);
       res.status(500).json({ error: 'Internal server error' });
     }
+  });
+
+  // ─── GET /api/network ─────────────────────────────────────────────────────
+
+  /**
+   * Returns network info the widget needs to initialise the kit.
+   * Keeps the widget config-free — it just knows the API URL.
+   */
+  router.get('/network', (_req: Request, res: Response) => {
+    res.json({
+      network,
+      networkPassphrase: NETWORK_PASSPHRASES[network],
+      horizonUrl: HORIZON_URLS[network],
+    });
   });
 
   return router;

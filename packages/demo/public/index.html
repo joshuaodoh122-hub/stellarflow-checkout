@@ -9,8 +9,7 @@
     body {
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: #f5f5f5;
-      margin: 0;
-      padding: 0;
+      margin: 0; padding: 0;
       color: #1a1a2e;
     }
     header {
@@ -22,7 +21,7 @@
       gap: 12px;
     }
     header h1 { margin: 0; font-size: 20px; }
-    header .badge {
+    .badge {
       background: #f0803c;
       color: white;
       font-size: 11px;
@@ -30,8 +29,8 @@
       border-radius: 99px;
       font-weight: 600;
     }
-    .container { max-width: 900px; margin: 0 auto; padding: 40px 24px; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 24px; }
+    .container { max-width: 960px; margin: 0 auto; padding: 40px 24px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 24px; }
     .card {
       background: white;
       border-radius: 12px;
@@ -39,12 +38,9 @@
       box-shadow: 0 2px 8px rgba(0,0,0,0.08);
     }
     .card-img {
-      width: 100%;
-      aspect-ratio: 4/3;
+      width: 100%; aspect-ratio: 4/3;
       background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      display: flex; align-items: center; justify-content: center;
       font-size: 56px;
     }
     .card-body { padding: 20px; }
@@ -58,15 +54,33 @@
       font-size: 12px;
       padding: 4px 10px;
       border-radius: 99px;
-      margin-bottom: 32px;
+      margin-bottom: 24px;
       font-weight: 600;
     }
-    .network-badge.mainnet {
-      background: #fee2e2;
-      color: #991b1b;
-    }
+    .network-badge.mainnet { background: #fee2e2; color: #991b1b; }
     h2 { font-size: 24px; margin-bottom: 8px; }
-    .subtitle { color: #666; margin-bottom: 24px; font-size: 14px; }
+    .subtitle { color: #666; margin-bottom: 28px; font-size: 14px; line-height: 1.6; }
+
+    /* Integration guide */
+    .guide {
+      background: white;
+      border-radius: 12px;
+      padding: 24px;
+      margin-top: 40px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    }
+    .guide h3 { margin: 0 0 12px; font-size: 16px; }
+    .guide pre {
+      background: #1a1a2e;
+      color: #a3e635;
+      padding: 16px;
+      border-radius: 8px;
+      font-size: 12px;
+      overflow-x: auto;
+      margin: 0;
+    }
+
+    /* Event log */
     #event-log {
       background: #1a1a2e;
       color: #a3e635;
@@ -74,29 +88,34 @@
       font-size: 12px;
       padding: 16px;
       border-radius: 8px;
-      height: 150px;
+      height: 120px;
       overflow-y: auto;
-      margin-top: 40px;
+      margin-top: 32px;
     }
-    #event-log p { margin: 0 0 4px; }
+    #event-log p { margin: 0 0 3px; }
+    #event-log .ts { color: #6b7280; }
   </style>
 </head>
 <body>
   <header>
     <h1>⭐ StellarFlow Demo Shop</h1>
-    <span class="badge">TESTNET</span>
+    <span class="badge" id="network-badge">Loading…</span>
   </header>
 
   <div class="container">
-    <div id="network-info" class="network-badge">
-      Loading network info…
-    </div>
+    <div id="network-info" class="network-badge">🧪 Connecting…</div>
 
     <h2>Digital Downloads</h2>
-    <p class="subtitle">A demo storefront showing StellarFlow Checkout. Payments go directly to the merchant's Stellar wallet.</p>
+    <p class="subtitle">
+      A reference storefront demonstrating StellarFlow Checkout.
+      The widget supports <strong>two payment paths</strong>: connect a browser wallet directly
+      (Freighter, Lobstr, xBull, Albedo, Hana) or scan a QR code / open a deep link
+      with any SEP-0007-compatible mobile wallet. Both paths confirm the same way —
+      memo-matched, deduplicated, on-chain. Funds go directly to the merchant's wallet.
+    </p>
 
     <div class="grid">
-      <!-- Product 1 -->
+      <!-- Product 1: XLM -->
       <div class="card">
         <div class="card-img">📚</div>
         <div class="card-body">
@@ -113,7 +132,7 @@
         </div>
       </div>
 
-      <!-- Product 2 -->
+      <!-- Product 2: USDC -->
       <div class="card">
         <div class="card-img">🎵</div>
         <div class="card-body">
@@ -130,7 +149,7 @@
         </div>
       </div>
 
-      <!-- Product 3 -->
+      <!-- Product 3: XLM -->
       <div class="card">
         <div class="card-img">🎨</div>
         <div class="card-body">
@@ -148,77 +167,128 @@
       </div>
     </div>
 
+    <!-- Integration guide -->
+    <div class="guide">
+      <h3>Merchant integration (3 lines)</h3>
+      <pre id="integration-snippet">Loading…</pre>
+    </div>
+
+    <!-- Event log -->
     <div id="event-log">
       <p>// StellarFlow event log</p>
     </div>
   </div>
 
   <!--
-    MERCHANT INTEGRATION NOTE:
-    Load the widget script with Subresource Integrity (SRI) to protect against
-    supply-chain attacks. Generate the hash with:
-      openssl dgst -sha384 -binary stellarflow-widget.js | openssl base64 -A
+    ═══════════════════════════════════════════════════════════════
+    MERCHANT INTEGRATION NOTES
+    ═══════════════════════════════════════════════════════════════
 
-    Example (replace hash with actual):
-    <script
-      src="https://cdn.example.com/stellarflow-widget.js"
-      integrity="sha384-REPLACE_WITH_ACTUAL_HASH"
-      crossorigin="anonymous"
-    ></script>
+    1. SUBRESOURCE INTEGRITY (SRI)
+    Always load the widget script with an SRI hash to protect against
+    supply-chain attacks. The build script outputs the hash at:
+      packages/widget/dist/stellarflow-widget.manifest.json
 
-    Recommended Content Security Policy for embedding pages:
+    Example:
+      <script
+        src="https://cdn.example.com/stellarflow-widget.js"
+        integrity="sha384-REPLACE_WITH_HASH_FROM_MANIFEST"
+        crossorigin="anonymous"
+      ></script>
+
+    2. CONTENT SECURITY POLICY
+    Add this to your checkout page's CSP header:
       default-src 'self';
       script-src 'self' https://cdn.example.com;
-      connect-src 'self' https://horizon-testnet.stellar.org;
+      connect-src 'self'
+        https://horizon-testnet.stellar.org
+        https://api.coingecko.com;
       img-src 'self' data:;
+      style-src 'self' 'unsafe-inline';
+      frame-ancestors 'none';
 
-    See ARCHITECTURE.md for full CSP guidance.
+    For mainnet replace horizon-testnet with horizon.stellar.org.
+
+    3. TESTNET DEFAULT
+    The demo server defaults to testnet. No real funds are used.
+    To opt into mainnet: set STELLAR_NETWORK=mainnet in .env
+    and acknowledge the startup warning.
+    ═══════════════════════════════════════════════════════════════
   -->
+
   <script src="/stellarflow-widget.js"></script>
   <script>
-    // Detect the API URL from the current page origin
-    const API_URL = window.location.origin;
+    (function () {
+      var API_URL = window.location.origin;
 
-    // Set api-url on all widget containers
-    document.querySelectorAll('[data-stellarflow]').forEach(function(el) {
-      el.dataset.apiUrl = API_URL;
-    });
+      // Inject API URL into all widget containers
+      document.querySelectorAll('[data-stellarflow]').forEach(function (el) {
+        el.dataset.apiUrl = API_URL;
+      });
 
-    // Update network badge
-    fetch(API_URL + '/health')
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        var badge = document.getElementById('network-info');
-        if (data.network === 'mainnet') {
-          badge.textContent = '⚠️ MAINNET — real funds';
-          badge.className = 'network-badge mainnet';
-        } else {
-          badge.textContent = '🧪 TESTNET — no real funds';
-        }
-      })
-      .catch(function() {});
+      // Fetch network info and update UI
+      fetch(API_URL + '/health')
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          var badge = document.getElementById('network-info');
+          var headerBadge = document.getElementById('network-badge');
+          if (data.network === 'mainnet') {
+            badge.textContent = '⚠️ MAINNET — real funds';
+            badge.className = 'network-badge mainnet';
+            headerBadge.textContent = 'MAINNET';
+            headerBadge.style.background = '#dc2626';
+          } else {
+            badge.textContent = '🧪 TESTNET — no real funds';
+            badge.className = 'network-badge';
+            headerBadge.textContent = 'TESTNET';
+          }
 
-    // Initialize all widgets
-    StellarFlow.init();
+          // Show integration snippet with actual API URL
+          var snippet = document.getElementById('integration-snippet');
+          if (snippet) {
+            snippet.textContent = [
+              '<script src="stellarflow-widget.js"',
+              '  integrity="sha384-..." crossorigin="anonymous"><\/script>',
+              '',
+              '<div data-stellarflow',
+              '  data-api-url="' + API_URL + '"',
+              '  data-fiat-amount="9.99"',
+              '  data-asset="XLM"',
+              '  data-label="Your Product"><\/div>',
+              '',
+              '<script>StellarFlow.init();<\/script>',
+            ].join('\n');
+          }
+        })
+        .catch(function () {});
 
-    // Log widget events
-    var log = document.getElementById('event-log');
-    function logEvent(msg) {
-      var p = document.createElement('p');
-      p.textContent = new Date().toISOString().slice(11, 19) + ' ' + msg;
-      log.appendChild(p);
-      log.scrollTop = log.scrollHeight;
-    }
+      // Initialize all widgets
+      StellarFlow.init();
 
-    document.addEventListener('stellarflow:paid', function(e) {
-      logEvent('✅ payment.confirmed — order ' + e.detail.orderId);
-    });
-    document.addEventListener('stellarflow:review', function(e) {
-      logEvent('⚠️ payment.review — order ' + e.detail.orderId + ' status=' + e.detail.status);
-    });
-    document.addEventListener('stellarflow:error', function(e) {
-      logEvent('❌ error — ' + e.detail.message);
-    });
+      // Event logging
+      var log = document.getElementById('event-log');
+      function logEvent(msg, color) {
+        var p = document.createElement('p');
+        var ts = document.createElement('span');
+        ts.className = 'ts';
+        ts.textContent = new Date().toISOString().slice(11, 23) + ' ';
+        p.appendChild(ts);
+        p.appendChild(document.createTextNode(msg));
+        if (color) p.style.color = color;
+        log.appendChild(p);
+        log.scrollTop = log.scrollHeight;
+      }
+
+      document.addEventListener('stellarflow:paid', function (e) {
+        logEvent('✅ stellarflow:paid — order ' + e.detail.orderId, '#22c55e');
+      });
+      document.addEventListener('stellarflow:review', function (e) {
+        logEvent('⚠️  stellarflow:review — order ' + e.detail.orderId + ' status=' + e.detail.status, '#f59e0b');
+      });
+      document.addEventListener('stellarflow:error', function (e) {
+        logEvent('❌ stellarflow:error — ' + e.detail.message, '#ef4444');
+      });
+    })();
   </script>
 </body>
 </html>

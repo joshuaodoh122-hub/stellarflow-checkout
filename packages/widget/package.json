@@ -5,10 +5,14 @@
   "main": "dist/stellarflow-widget.js",
   "scripts": {
     "build": "node scripts/build.js",
+    "postbuild": "cp dist/stellarflow-widget.js ../demo/public/stellarflow-widget.js && echo '📋 Copied to demo/public/'",
     "clean": "rm -rf dist"
   },
   "devDependencies": {
     "esbuild": "^0.20.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@creit.tech/stellar-wallets-kit": "2.6.0"
+  }
 }
