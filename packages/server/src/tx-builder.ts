@@ -27,7 +27,6 @@
 
 import {
   TransactionBuilder,
-  Networks,
   Asset as StellarAsset,
   Operation,
   Memo,
