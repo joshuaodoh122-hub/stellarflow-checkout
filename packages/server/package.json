@@ -1,0 +1,30 @@
+{
+  "name": "@stellarflow/server",
+  "version": "0.1.0",
+  "description": "Express middleware and session manager for StellarFlow Checkout",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "test": "jest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@stellarflow/core": "*",
+    "express": "^4.18.2",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/uuid": "^9.0.7",
+    "@types/jest": "^29.5.0",
+    "@types/node": "^20.0.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.0",
+    "typescript": "^5.4.0",
+    "supertest": "^6.3.4",
+    "@types/supertest": "^6.0.2"
+  },
+  "license": "MIT"
+}

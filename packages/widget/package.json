@@ -1,0 +1,14 @@
+{
+  "name": "@stellarflow/widget",
+  "version": "0.1.0",
+  "description": "Vanilla JS embeddable payment widget for StellarFlow Checkout",
+  "main": "dist/stellarflow-widget.js",
+  "scripts": {
+    "build": "node scripts/build.js",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "esbuild": "^0.20.0"
+  },
+  "license": "MIT"
+}

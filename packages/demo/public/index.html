@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>StellarFlow Demo Shop</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f5f5f5;
+      margin: 0;
+      padding: 0;
+      color: #1a1a2e;
+    }
+    header {
+      background: #1a1a2e;
+      color: white;
+      padding: 16px 32px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    header h1 { margin: 0; font-size: 20px; }
+    header .badge {
+      background: #f0803c;
+      color: white;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 99px;
+      font-weight: 600;
+    }
+    .container { max-width: 900px; margin: 0 auto; padding: 40px 24px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 24px; }
+    .card {
+      background: white;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+    .card-img {
+      width: 100%;
+      aspect-ratio: 4/3;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 56px;
+    }
+    .card-body { padding: 20px; }
+    .card-title { font-size: 17px; font-weight: 700; margin: 0 0 6px; }
+    .card-desc { font-size: 13px; color: #666; margin: 0 0 16px; line-height: 1.5; }
+    .card-price { font-size: 22px; font-weight: 700; color: #1a1a2e; margin-bottom: 16px; }
+    .network-badge {
+      display: inline-block;
+      background: #fef3c7;
+      color: #92400e;
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 99px;
+      margin-bottom: 32px;
+      font-weight: 600;
+    }
+    .network-badge.mainnet {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+    h2 { font-size: 24px; margin-bottom: 8px; }
+    .subtitle { color: #666; margin-bottom: 24px; font-size: 14px; }
+    #event-log {
+      background: #1a1a2e;
+      color: #a3e635;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      padding: 16px;
+      border-radius: 8px;
+      height: 150px;
+      overflow-y: auto;
+      margin-top: 40px;
+    }
+    #event-log p { margin: 0 0 4px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>⭐ StellarFlow Demo Shop</h1>
+    <span class="badge">TESTNET</span>
+  </header>
+
+  <div class="container">
+    <div id="network-info" class="network-badge">
+      Loading network info…
+    </div>
+
+    <h2>Digital Downloads</h2>
+    <p class="subtitle">A demo storefront showing StellarFlow Checkout. Payments go directly to the merchant's Stellar wallet.</p>
+
+    <div class="grid">
+      <!-- Product 1 -->
+      <div class="card">
+        <div class="card-img">📚</div>
+        <div class="card-body">
+          <div class="card-title">TypeScript Handbook PDF</div>
+          <div class="card-desc">A comprehensive guide to TypeScript for working developers. Instant download, DRM-free.</div>
+          <div class="card-price">$9.99</div>
+          <div
+            data-stellarflow
+            data-api-url=""
+            data-fiat-amount="9.99"
+            data-asset="XLM"
+            data-label="TypeScript Handbook PDF"
+          ></div>
+        </div>
+      </div>
+
+      <!-- Product 2 -->
+      <div class="card">
+        <div class="card-img">🎵</div>
+        <div class="card-body">
+          <div class="card-title">Lo-Fi Study Beats Pack</div>
+          <div class="card-desc">24 royalty-free lo-fi tracks for studying and coding. FLAC + MP3 formats included.</div>
+          <div class="card-price">$4.99</div>
+          <div
+            data-stellarflow
+            data-api-url=""
+            data-fiat-amount="4.99"
+            data-asset="USDC"
+            data-label="Lo-Fi Study Beats Pack"
+          ></div>
+        </div>
+      </div>
+
+      <!-- Product 3 -->
+      <div class="card">
+        <div class="card-img">🎨</div>
+        <div class="card-body">
+          <div class="card-title">Figma UI Component Kit</div>
+          <div class="card-desc">200+ production-ready Figma components. Auto-layout, dark/light mode, accessibility annotations.</div>
+          <div class="card-price">$24.99</div>
+          <div
+            data-stellarflow
+            data-api-url=""
+            data-fiat-amount="24.99"
+            data-asset="XLM"
+            data-label="Figma UI Component Kit"
+          ></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="event-log">
+      <p>// StellarFlow event log</p>
+    </div>
+  </div>
+
+  <!--
+    MERCHANT INTEGRATION NOTE:
+    Load the widget script with Subresource Integrity (SRI) to protect against
+    supply-chain attacks. Generate the hash with:
+      openssl dgst -sha384 -binary stellarflow-widget.js | openssl base64 -A
+
+    Example (replace hash with actual):
+    <script
+      src="https://cdn.example.com/stellarflow-widget.js"
+      integrity="sha384-REPLACE_WITH_ACTUAL_HASH"
+      crossorigin="anonymous"
+    ></script>
+
+    Recommended Content Security Policy for embedding pages:
+      default-src 'self';
+      script-src 'self' https://cdn.example.com;
+      connect-src 'self' https://horizon-testnet.stellar.org;
+      img-src 'self' data:;
+
+    See ARCHITECTURE.md for full CSP guidance.
+  -->
+  <script src="/stellarflow-widget.js"></script>
+  <script>
+    // Detect the API URL from the current page origin
+    const API_URL = window.location.origin;
+
+    // Set api-url on all widget containers
+    document.querySelectorAll('[data-stellarflow]').forEach(function(el) {
+      el.dataset.apiUrl = API_URL;
+    });
+
+    // Update network badge
+    fetch(API_URL + '/health')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var badge = document.getElementById('network-info');
+        if (data.network === 'mainnet') {
+          badge.textContent = '⚠️ MAINNET — real funds';
+          badge.className = 'network-badge mainnet';
+        } else {
+          badge.textContent = '🧪 TESTNET — no real funds';
+        }
+      })
+      .catch(function() {});
+
+    // Initialize all widgets
+    StellarFlow.init();
+
+    // Log widget events
+    var log = document.getElementById('event-log');
+    function logEvent(msg) {
+      var p = document.createElement('p');
+      p.textContent = new Date().toISOString().slice(11, 19) + ' ' + msg;
+      log.appendChild(p);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    document.addEventListener('stellarflow:paid', function(e) {
+      logEvent('✅ payment.confirmed — order ' + e.detail.orderId);
+    });
+    document.addEventListener('stellarflow:review', function(e) {
+      logEvent('⚠️ payment.review — order ' + e.detail.orderId + ' status=' + e.detail.status);
+    });
+    document.addEventListener('stellarflow:error', function(e) {
+      logEvent('❌ error — ' + e.detail.message);
+    });
+  </script>
+</body>
+</html>
