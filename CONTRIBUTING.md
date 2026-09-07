@@ -1,6 +1,6 @@
 # Contributing to StellarFlow Checkout
 
-Thank you for your interest in contributing. StellarFlow is submitted to the Stellar Drips Wave program and welcomes contributions from the community.
+Thank you for your interest in contributing. This repository welcomes contributions from the community.
 
 ## Before you start
 
