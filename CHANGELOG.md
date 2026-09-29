@@ -1,0 +1,89 @@
+# Changelog
+
+All notable changes to StellarFlow Checkout are documented here.
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+This project uses [Semantic Versioning](https://semver.org/).
+
+---
+
+## [Unreleased]
+
+### Added
+
+- HTTP integration tests for all 5 checkout API endpoints (`checkout-router.test.ts`)
+  using supertest with mocked QuoteService and Horizon.
+- Unit tests for `SessionManager` and `InMemorySessionStore` covering session creation,
+  status transitions, webhook firing, and multiple-handler ordering
+  (`session-manager.test.ts`).
+- Unit tests for `buildPaymentTx` with mocked Horizon, verifying XDR structure
+  (destination, asset, amount, MEMO\_ID) for both XLM and USDC sessions
+  (`tx-builder.test.ts`).
+- `CHANGELOG.md` (this file).
+- `EMMY_CHANGELOG.md` — running audit log for all Wave Program review changes.
+
+---
+
+## [0.1.0] — 2026-09-28
+
+### Added
+
+**`@stellarflow/core`**
+- `HorizonPaymentListener` — SSE-based payment listener with exponential-backoff
+  reconnection. `CursorStore` interface with `InMemoryCursorStore` and
+  `FileCursorStore` implementations for crash-safe cursor persistence across restarts.
+- `parseHorizonRecord` — parses Horizon operation records into typed `PaymentEvent`
+  objects. Handles native XLM, USDC, path payments, and all memo types.
+- `matchPayment` / `MemoMatcher` — validates incoming `PaymentEvent` against an open
+  `CheckoutSession`: memo ID, destination, asset, amount (with configurable tolerance),
+  and quote expiry. Returns typed `MatchResult`.
+- `InMemoryIdempotencyStore` — deduplication by `txHash` so replayed SSE events do
+  not double-confirm a session.
+- `QuoteService` + `CoinGeckoPriceSource` — price quoting with a 3-minute TTL cache.
+  `PriceSource` interface is swappable (e.g. Reflector Soroban oracle, Binance).
+  USDC is hardcoded to $1.00 USD.
+- `buildSep0007Uri` / `sessionToSep0007Uri` / `renderQr` — SEP-0007 payment URI
+  generation and QR code rendering (PNG data URL + SVG).
+- Shared types: `CheckoutSession`, `PaymentEvent`, `Asset`, `PaymentStatus`,
+  `StellarNetwork`, `MatchResult`, `HORIZON_URLS`, `NETWORK_PASSPHRASES`,
+  `USDC_ISSUERS`.
+
+**`@stellarflow/server`**
+- `createCheckoutRouter` — Express router with 5 endpoints: POST /api/checkout,
+  GET /api/checkout/:orderId, POST /api/checkout/:orderId/tx,
+  POST /api/checkout/:orderId/submit, GET /api/sessions, GET /api/network.
+- `buildPaymentTx` — builds unsigned Stellar payment XDR for in-browser wallet
+  signing. Fetches customer account sequence number and fee stats from Horizon.
+- `SessionManager` + `InMemorySessionStore` — session lifecycle management with
+  webhook callbacks (`payment.confirmed`, `payment.review_required`,
+  `payment.underpayment`, `quote.expired`).
+- `PaymentProcessor` — glue layer connecting `HorizonPaymentListener` events to
+  `SessionManager` updates.
+
+**`@stellarflow/widget`**
+- Vanilla JS embeddable widget (no framework dependencies). Renders QR code and
+  deep link, polls for session status, emits `stellarflow:paid` and
+  `stellarflow:review` DOM events.
+
+**`@stellarflow/demo`**
+- Reference storefront (Node/Express) demonstrating the full checkout loop with
+  `FileCursorStore` for crash-safe SSE cursor persistence.
+
+**Infrastructure**
+- GitHub Actions CI: lint (ESLint), typecheck (tsc), test (Jest with coverage),
+  Node 18 and 20 matrix. CI is green.
+- `ARCHITECTURE.md` — design decisions: memo scheme, price source, review flow,
+  refund story, cursor persistence, known gaps (stuck-session expiry, background sweep).
+- `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE` (MIT).
+
+### Design decisions recorded
+
+- **Non-custodial invariant**: funds flow directly customer → merchant. Server never
+  holds keys or signing authority.
+- **MEMO_ID scheme**: uint64, natively indexed by Horizon, human-readable.
+- **Cursor persistence**: `FileCursorStore` with synchronous write ensures payments
+  that arrive during server downtime are not silently missed on restart.
+- **Double-submit guard**: session transitions to `submitting` before Horizon call;
+  second concurrent submit sees `409` before XDR validation.
+- **XDR validation on submit**: server parses and validates destination, asset,
+  amount, and MEMO_ID before forwarding to Horizon — prevents attacker from using the
+  submit endpoint to forward arbitrary transactions.
