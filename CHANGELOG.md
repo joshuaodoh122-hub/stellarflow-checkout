@@ -20,12 +20,6 @@ This project uses [Semantic Versioning](https://semver.org/).
   (`tx-builder.test.ts`).
 - `CHANGELOG.md` (this file).
 - `EMMY_CHANGELOG.md` — running audit log for all Wave Program review changes.
-- README overhaul: explicit Soroban status statement, ASCII sequence diagram, numbered
-  quick-start with prerequisites, full API endpoint reference, versioned roadmap,
-  honest known-limitations section.
-- README overhaul: explicit Soroban status statement, ASCII sequence diagram, numbered
-  quick-start with prerequisites, full API endpoint reference, versioned roadmap,
-  honest known-limitations section.
 
 ---
 
