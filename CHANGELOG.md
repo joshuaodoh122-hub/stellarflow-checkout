@@ -10,6 +10,14 @@ This project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `HorizonPaymentListener` lifecycle and SSE message handler integration tests
+  (`horizon-listener-integration.test.ts`) — 22 tests covering `start()`, `stop()`,
+  cursor restoration from `CursorStore`, `onmessage` delivery for all payment types,
+  non-payment record filtering, memo-fetch failure handling, and `onerror` behaviour.
+- Full SSE→processor→session pipeline tests (`payment-pipeline.test.ts`) — 12
+  end-to-end tests: XLM/USDC happy path, `amountToleranceStroops`, `submitting`→`paid`
+  in-browser path, underpayment, wrong-asset, expired-quote, duplicate-event, and
+  overpayment scenarios.
 - HTTP integration tests for all 5 checkout API endpoints (`checkout-router.test.ts`)
   using supertest with mocked QuoteService and Horizon.
 - Unit tests for `SessionManager` and `InMemorySessionStore` covering session creation,
