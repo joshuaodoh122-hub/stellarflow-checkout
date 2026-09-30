@@ -5,6 +5,130 @@ Entries are append-only — never overwritten. Most recent entry at the top.
 
 ---
 
+## 2026-09-30 — Refactor: typed excessStroops on MatchResult (pre-escrow hardening)
+
+**Branch:** `refactor/typed-overpayment-excess`
+**PR:** TBD
+
+### What was changed
+
+**`packages/core/src/types.ts`**
+
+`MatchResult` expanded from a 2-variant to a 3-variant discriminated union:
+
+```typescript
+// Before
+export type MatchResult =
+  | { matched: true; status: 'paid' }
+  | { matched: false; status: PaymentStatus; reason: string };
+
+// After
+export type MatchResult =
+  | { matched: true; status: 'paid' }
+  | { matched: false; status: 'overpaid'; reason: string; excessStroops: bigint }
+  | { matched: false; status: Exclude<PaymentStatus, 'paid' | 'overpaid'>; reason: string };
+```
+
+The explicit `'overpaid'` variant carries `excessStroops: bigint` as a typed field.
+TypeScript's discriminant narrowing on `status === 'overpaid'` now resolves to that
+variant specifically, making `result.excessStroops` available without any cast.
+
+**`packages/core/src/memo-matcher.ts`**
+
+Overpayment return object gains `excessStroops: excess` — the value is the already-computed
+`excess` bigint, so no new calculation is needed:
+
+```typescript
+return {
+  matched: false,
+  status: 'overpaid',
+  reason: `overpayment: got ${event.amount}, expected ${session.amount} (excess ${excess} stroops)`,
+  excessStroops: excess,   // ← new structured field
+};
+```
+
+**`packages/server/src/payment-processor.ts`**
+
+Regex parsing removed entirely. Before:
+
+```typescript
+const excessMatch = (result as { reason: string }).reason.match(/excess (\d+) stroops/);
+const excessStroops = excessMatch ? BigInt(excessMatch[1]) : 0n;
+await this.sessionManager.markOverpaid(session.orderId, event.txHash,
+  (result as { reason: string }).reason, excessStroops);
+```
+
+After:
+
+```typescript
+await this.sessionManager.markOverpaid(
+  session.orderId,
+  event.txHash,
+  result.reason,
+  result.excessStroops,
+);
+```
+
+No cast was needed — the 3-variant `MatchResult` narrows cleanly on
+`result.status === 'overpaid'`. The `review_required` branch also lost its `as` casts
+on `result.reason` and `result.status`, which were made redundant by the same
+type restructuring.
+
+**`packages/core/src/__tests__/memo-matcher.test.ts`**
+
+The overpayment test now asserts the structured field directly:
+
+```typescript
+expect((result as { excessStroops: bigint }).excessStroops).toBe(10_000_000n);
+expect((result as { reason: string }).reason).toContain('10000000 stroops'); // kept
+```
+
+Both assertions are present: the typed field (load-bearing) and the reason string
+(informational, useful for regression-catching the human-readable format).
+
+### Why
+
+The previous implementation extracted `excessStroops` from the human-readable `reason`
+string via regex in `payment-processor.ts`. Two files were implicitly coupled through
+exact wording of a display string — a rename of "excess" → "surplus" or a reformat of
+the number would silently produce `excessStroops = 0n` in the webhook with no compile-time
+warning. For a financial value that ends up in a merchant-facing webhook, that's
+unacceptable coupling. The fix is additive: `reason` is still present and still tested,
+but it is no longer the source of truth for the stroop count.
+
+### Cast required for narrowing? No.
+
+The discriminated union narrowing worked cleanly without any cast. The key was splitting
+`MatchResult` into 3 explicit variants rather than using `status: PaymentStatus` (a wide
+union) in the non-match branch. With `status: PaymentStatus`, TypeScript cannot narrow
+to a specific subtype on `status === 'overpaid'` because the whole second variant already
+covers all `PaymentStatus` values — the discriminant is not unique. With 3 explicit
+variants, each `status` value belongs to exactly one variant, so narrowing is clean.
+
+### Optional follow-up flagged
+
+The `'underpayment'` branch has the same pattern: `shortfall` bigint embedded in a reason
+string, never exposed as a structured field. Consistency would suggest adding
+`shortfallStroops: bigint` to a dedicated `'underpayment'` variant of `MatchResult`
+in a future pass. Not done here — kept strictly to the overpayment scope as instructed.
+
+### Test count before / after
+
+- Before: 216 tests across 11 suites
+- After: 216 tests across 11 suites (no count change — existing overpayment test
+  strengthened with an additional assertion, not replaced)
+
+### Files modified
+
+- `packages/core/src/types.ts`
+- `packages/core/src/memo-matcher.ts`
+- `packages/core/src/__tests__/memo-matcher.test.ts`
+- `packages/server/src/payment-processor.ts`
+- `CHANGELOG.md`
+- `EMMY_CHANGELOG.md` (this file — appended)
+
+---
+
 ## 2026-09-30 — PR 3 (pre-escrow): Overpayment fix + Rust/Soroban setup doc
 
 **Branch:** `fix/overpayment-handling`

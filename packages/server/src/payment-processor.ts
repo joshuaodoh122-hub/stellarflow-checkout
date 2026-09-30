@@ -67,15 +67,12 @@ export class PaymentProcessor {
     if (result.matched) {
       await this.sessionManager.markPaid(session.orderId, event.txHash);
     } else if (result.status === 'overpaid') {
-      // Extract the excess stroop count from the reason string.
-      // The reason format is: "overpayment: got X, expected Y (excess N stroops)"
-      const excessMatch = (result as { reason: string }).reason.match(/excess (\d+) stroops/);
-      const excessStroops = excessMatch ? BigInt(excessMatch[1]) : 0n;
+      // excessStroops is a structured typed field on the MatchResult — no parsing needed.
       await this.sessionManager.markOverpaid(
         session.orderId,
         event.txHash,
-        (result as { reason: string }).reason,
-        excessStroops,
+        result.reason,
+        result.excessStroops,
       );
     } else if (
       result.status === 'review_required' ||
@@ -85,8 +82,8 @@ export class PaymentProcessor {
       await this.sessionManager.markReviewRequired(
         session.orderId,
         event.txHash,
-        (result as { reason: string }).reason,
-        result.status as 'review_required' | 'underpayment' | 'wrong_asset' | 'expired',
+        result.reason,
+        result.status,
       );
     }
     // For 'pending' results (memo mismatch, duplicate, destination mismatch),
