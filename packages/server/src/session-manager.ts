@@ -66,6 +66,7 @@ export type WebhookEvent =
   | { type: 'payment.confirmed'; session: CheckoutSession; txHash: string }
   | { type: 'payment.review_required'; session: CheckoutSession; txHash: string; reason: string }
   | { type: 'payment.underpayment'; session: CheckoutSession; txHash: string; reason: string }
+  | { type: 'payment.overpaid'; session: CheckoutSession; txHash: string; reason: string; excessStroops: bigint }
   | { type: 'quote.expired'; session: CheckoutSession };
 
 export type WebhookHandler = (event: WebhookEvent) => void | Promise<void>;
@@ -141,6 +142,37 @@ export class SessionManager {
     const session = await this.store.get(orderId);
     if (session) {
       await this.fireWebhook({ type: 'payment.confirmed', session, txHash });
+    }
+  }
+
+  /**
+   * Handle an overpayment: mark the session paid (funds were received in full)
+   * and ALSO fire a payment.overpaid webhook carrying the excess amount so the
+   * merchant's system has a clear signal to initiate reconciliation/refund.
+   *
+   * Design decision: the session is marked 'paid' because the merchant DID
+   * receive at least the quoted amount on-chain — it is safe to fulfil the order.
+   * The separate payment.overpaid webhook is the mechanism for the merchant to
+   * discover and act on the excess. This is more conservative than silently
+   * accepting (which loses the signal entirely) and more practical than marking
+   * the session 'review_required' (which would block order fulfilment even though
+   * the merchant holds sufficient funds). Webhook consumers MUST handle
+   * payment.overpaid as an additional event after payment.confirmed for the same
+   * orderId — they arrive in that order for the same transaction.
+   */
+  async markOverpaid(
+    orderId: bigint,
+    txHash: string,
+    reason: string,
+    excessStroops: bigint,
+  ): Promise<void> {
+    await this.store.updateStatus(orderId, 'paid');
+    const session = await this.store.get(orderId);
+    if (session) {
+      // First fire payment.confirmed so the merchant knows the order is fulfilled
+      await this.fireWebhook({ type: 'payment.confirmed', session, txHash });
+      // Then fire payment.overpaid so the merchant knows reconciliation is needed
+      await this.fireWebhook({ type: 'payment.overpaid', session, txHash, reason, excessStroops });
     }
   }
 

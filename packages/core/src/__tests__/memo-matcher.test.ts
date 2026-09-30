@@ -147,7 +147,7 @@ describe('matchPayment — happy path', () => {
     expect(result.matched).toBe(true);
   });
 
-  it('accepts overpayment', async () => {
+  it('flags overpayment: matched:false, status:overpaid, reason includes excess stroops', async () => {
     const store = new InMemoryIdempotencyStore();
     const result = await matchPayment(
       makeSession({ amount: '100.0000000' }),
@@ -155,7 +155,25 @@ describe('matchPayment — happy path', () => {
       store,
       NOW,
     );
+    // Overpayment must NOT silently match — it must be flagged
+    expect(result.matched).toBe(false);
+    expect(result.status).toBe('overpaid');
+    // 101 XLM − 100 XLM = 1 XLM = 10_000_000 stroops
+    expect((result as { reason: string }).reason).toContain('10000000 stroops');
+  });
+
+  it('accepts overpayment within tolerance as an exact match', async () => {
+    const store = new InMemoryIdempotencyStore();
+    const result = await matchPayment(
+      makeSession({ amount: '100.0000000' }),
+      makeEvent({ amount: '100.0000001' }), // 1 stroop over
+      store,
+      NOW,
+      { amountToleranceStroops: 5n },
+    );
+    // Within tolerance — treat as exact payment
     expect(result.matched).toBe(true);
+    expect(result.status).toBe('paid');
   });
 });
 
