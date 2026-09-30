@@ -19,7 +19,7 @@ are planned and in active development:
 
 | Feature | Status | Branch |
 |---|---|---|
-| Soroban escrow checkout (`EscrowCheckoutSession`) | 🔨 In development | `feat/soroban-escrow` |
+| Soroban escrow checkout (`EscrowCheckoutSession`) | ✅ Built & tested — deploy pending | `feat/soroban-escrow` |
 | Reflector on-chain price oracle (`ReflectorPriceSource`) | Planned v0.3 | — |
 
 The `PriceSource` interface in `packages/core/src/price-quote.ts` is already designed
@@ -343,7 +343,9 @@ cd packages/server && npm test
 
 | Version | Feature |
 |---|---|
-| v0.2 | Soroban escrow checkout (in development — see `feat/soroban-escrow`) |
+| v0.2 | Soroban escrow checkout (built & tested — deploy pending; see `feat/soroban-escrow`) |
+| v0.2 (future) | Escrow: partial releases/refunds (all-or-nothing in current version) |
+| v0.2 (future) | Escrow: third-party arbitration (no arbiter role in current version) |
 | v0.3 | Reflector on-chain price oracle (`ReflectorPriceSource` via `PriceSource` interface) |
 | v0.4 | Persistent session store (SQLite implementation of `SessionStore`) |
 | v0.5 | Webhook HMAC-SHA256 signing |

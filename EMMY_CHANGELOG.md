@@ -5,6 +5,150 @@ Entries are append-only — never overwritten. Most recent entry at the top.
 
 ---
 
+## 2026-09-30 — Soroban escrow contract + TypeScript integration (v0.2)
+
+**Branch:** `feat/soroban-escrow`
+**PR:** TBD (do not merge without explicit approval)
+
+### What was changed
+
+**New: `contracts/escrow/` — Rust/Soroban escrow contract**
+
+- `contracts/escrow/Cargo.toml` — `soroban-sdk = "=28.0.0"` pinned. Verified
+  2026-09-30: `soroban-env-host 28.0.2` declares `ed25519-dalek = "^2.0.0"`, which
+  in Rust semver means `>=2.0.0,<3.0.0`. Cargo.lock confirms resolution to 2.2.0.
+  No explicit upper-bound pin needed; documented in Cargo.toml comment.
+
+- `contracts/escrow/src/lib.rs` — full escrow contract:
+  - `EscrowRecord` — payer, merchant, amount, token, status, deposited_at, timeout_ledgers
+  - `EscrowStatus` enum — `Held | Released | Refunded`
+  - `EscrowError` (`#[contracterror]`) — AlreadyExists(1), NotFound(2),
+    AlreadyReleased(3), AlreadyRefunded(4), NotMerchant(5), NotAuthorized(6),
+    TimeoutNotElapsed(7)
+  - `deposit(payer, merchant, amount, token, order_id, timeout_ledgers)` — payer-authed;
+    rejects duplicate order_ids
+  - `release(order_id)` — merchant-authed via `record.merchant.require_auth()`
+  - `refund(order_id, caller)` — merchant (any time) or payer (after timeout_ledgers);
+    `NotAuthorized` for any other caller; `TimeoutNotElapsed` for early payer refund
+  - `get_escrow(order_id)` — read-only; `NotFound` on missing key (no panic)
+  - Default timeout: `DEFAULT_TIMEOUT_LEDGERS = 518_400` (30 days at ~5 s/ledger)
+
+- `contracts/escrow/Cargo.lock` — committed (binary/deployable artifact).
+  Verified that root `.gitignore` contains no `Cargo.lock` entry (pure JS/TS
+  gitignore). Cargo.lock generated via `cargo generate-lockfile`.
+
+**New: `contracts/escrow/DEPLOY.md`** — deployment guide; honest statement that no
+live testnet deployment was performed in this PR.
+
+**17 Rust tests** in `contracts/escrow/src/lib.rs` (all pass):
+
+| Test | Coverage |
+|------|---------|
+| `test_deposit_release_happy_path` | deposit → release, balances, status |
+| `test_double_release_fails` | AlreadyReleased |
+| `test_merchant_voluntary_refund` | deposit → merchant refund, status Refunded |
+| `test_release_after_refund_fails` | AlreadyRefunded |
+| `test_payer_refund_before_timeout_fails` | TimeoutNotElapsed |
+| `test_payer_refund_after_timeout_succeeds` | ledger advance, payer refund |
+| `test_release_requires_merchant_auth_structural` | auth structural check |
+| `test_refund_by_random_fails` | NotAuthorized |
+| `test_duplicate_deposit_fails` | AlreadyExists |
+| `test_get_escrow_not_found` | NotFound (not a panic) |
+| `test_release_not_found` | NotFound |
+| `test_refund_not_found` | NotFound |
+| `test_amount_and_token_correctness` | exact balance accounting |
+| `test_default_timeout_applied` | timeout_ledgers=0 uses 518_400 |
+| `test_payer_refund_at_exact_unlock_ledger` | boundary: exactly at unlock |
+| `test_merchant_refund_no_time_gate` | merchant refunds at ledger 0 |
+| `test_deposited_at_recorded` | deposited_at = ledger at deposit time |
+
+Local verification: `cargo fmt --check` ✓, `cargo clippy --target wasm32v1-none -D warnings` ✓,
+`cargo test` (17/17) ✓, `cargo build --target wasm32v1-none --release` ✓.
+
+**New: `.github/workflows/contracts.yml`** — separate CI job for Rust (does not
+affect the JS/TS ci.yml matrix). Steps: fmt check, clippy (wasm32v1-none), test,
+wasm release build, WASM artifact upload. Path-filtered to `contracts/**` so the
+JS/TS matrix is not slowed. Real GitHub Actions run NOT verified (environment has
+no live runner); only local command equivalence confirmed — stated explicitly per
+CONTRIBUTING.md requirement.
+
+**New: `packages/server/src/escrow-session.ts`** — TypeScript integration:
+
+- `EscrowCheckoutSession` interface — sessionId, orderId, payerAddress,
+  merchantAddress, tokenContractId, amount, network, status, createdAt,
+  payerUnlockLedger, contractId
+- `EscrowSessionStatus` — `pending | deposited | fulfilled | refunded | failed`
+- `EscrowClient` — `deposit()`, `release()`, `refund()`, `getEscrow()`
+- `SorobanRpcClient` interface — injectable mock seam; `HttpSorobanRpcClient` is the
+  real implementation (used in production; never in tests)
+- `EscrowClientError` — typed error with `operation`, `code`, `codeName`
+- `ESCROW_ERROR_CODES` — constant map matching the Rust contract's enum values
+- `sessionIdToOrderIdHex()` — deterministic bigint → 64-char hex
+- `escrowRecordToSessionStatus()` — Held→deposited, Released→fulfilled, Refunded→refunded
+- Non-custodial invariant preserved: all signing in the caller's wallet; server
+  never holds keys
+
+**New: `packages/server/src/__tests__/escrow-session.test.ts`** — 34 TypeScript tests
+(all mocked, zero real network calls):
+
+Suites:
+- `EscrowClient.deposit()` — 4 tests
+- `EscrowClient.release()` — 4 tests
+- `EscrowClient.refund()` — 4 tests
+- `EscrowClient.getEscrow()` — 5 tests
+- `EscrowCheckoutSession lifecycle — mock end-to-end` — 5 tests
+- `escrowRecordToSessionStatus()` — 3 tests
+- `sessionIdToOrderIdHex()` — 4 tests
+- `EscrowClientError` — 4 tests
+- `EscrowClient network configuration` — 2 tests
+
+**Modified docs:**
+
+- `README.md` — escrow status row: "🔨 In development" → "✅ Built & tested — deploy
+  pending". Roadmap rows added for partial-release and arbitration (out of scope v0.2).
+- `ARCHITECTURE.md` — new "Soroban Escrow Contract (v0.2)" section: state machine,
+  auth model, timeout design + rationale, out-of-scope explicit list, TypeScript
+  integration, session ID mapping.
+- `SECURITY.md` — new "Soroban escrow contract security (v0.2)" section: guarantees,
+  trust assumptions, non-custodial invariant confirmation.
+- `packages/server/src/index.ts` — re-exports `escrow-session`.
+
+### Test counts before / after
+
+- Rust: 0 → 17 (new contract tests)
+- TypeScript: 216 → 250 (+34 escrow session tests)
+- Total: 216 → 267 tests across 12 TS suites + 1 Rust suite
+
+### ed25519-dalek finding (required by CONTRIBUTING.md)
+
+**Verified 2026-09-30** against crates.io live data:
+- `soroban-sdk 28.0.0` → `soroban-env-host 28.0.2` → `ed25519-dalek "^2.0.0"`
+- Rust semver `^2.0.0` = `>=2.0.0, <3.0.0` (does NOT reach 3.x)
+- Latest 2.x release: 2.2.0. Latest overall: 3.0.0.
+- Cargo.lock resolves to: **2.2.0** ✓
+- Decision: no pin needed. Finding documented in `contracts/escrow/Cargo.toml`.
+
+### Files created / modified
+
+**Created:**
+- `contracts/escrow/Cargo.toml`
+- `contracts/escrow/Cargo.lock`
+- `contracts/escrow/src/lib.rs`
+- `contracts/escrow/DEPLOY.md`
+- `.github/workflows/contracts.yml`
+- `packages/server/src/escrow-session.ts`
+- `packages/server/src/__tests__/escrow-session.test.ts`
+
+**Modified:**
+- `README.md`
+- `ARCHITECTURE.md`
+- `SECURITY.md`
+- `packages/server/src/index.ts`
+- `CHANGELOG.md`
+- `EMMY_CHANGELOG.md` (this file — appended)
+
+---
+
 ## 2026-09-30 — Refactor: typed excessStroops on MatchResult (pre-escrow hardening)
 
 **Branch:** `refactor/typed-overpayment-excess`

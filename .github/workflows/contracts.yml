@@ -1,0 +1,97 @@
+name: Contracts CI
+
+# Separate workflow for the Rust/Soroban escrow contract.
+# Does NOT run the JS/TS suite — that stays in ci.yml.
+# Runs on any push/PR that touches contracts/** to keep the JS/TS matrix fast.
+
+on:
+  push:
+    branches: [main, develop, "feat/**", "fix/**"]
+    paths:
+      - "contracts/**"
+      - ".github/workflows/contracts.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "contracts/**"
+      - ".github/workflows/contracts.yml"
+
+jobs:
+  escrow-contract:
+    name: Escrow Contract (fmt, clippy, test, wasm build)
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── Checkout ───────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Rust toolchain ─────────────────────────────────────────────────────
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32v1-none
+
+      # ── Cargo cache ────────────────────────────────────────────────────────
+      - name: Cache Cargo registry + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/escrow/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/escrow/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # ── stellar-cli (required by soroban-sdk build script) ─────────────────
+      # soroban-sdk's build script checks for stellar-cli v25.2.0+ and sets the
+      # SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2 env var only if it
+      # finds it via PATH. We download the binary rather than building it to
+      # keep CI fast (building stellar-cli takes ~5 minutes).
+      - name: Install stellar-cli
+        run: |
+          STELLAR_VERSION="28.1.0"
+          ARCH="x86_64-unknown-linux-gnu"
+          URL="https://github.com/stellar/stellar-cli/releases/download/v${STELLAR_VERSION}/stellar-cli-${STELLAR_VERSION}-${ARCH}.tar.gz"
+          curl -fL "$URL" -o /tmp/stellar-cli.tar.gz
+          tar xzf /tmp/stellar-cli.tar.gz -C /tmp/
+          sudo mv /tmp/stellar /usr/local/bin/stellar
+          chmod +x /usr/local/bin/stellar
+          stellar --version
+
+      # ── Format check ───────────────────────────────────────────────────────
+      - name: cargo fmt --check
+        working-directory: contracts/escrow
+        run: cargo fmt --check
+
+      # ── Clippy (wasm32v1-none) ──────────────────────────────────────────────
+      # The SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2 env var is required
+      # by soroban-sdk's build script when targeting wasm32v1-none directly
+      # (rather than going through `stellar contract build`).
+      - name: cargo clippy
+        working-directory: contracts/escrow
+        env:
+          SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2: "true"
+        run: cargo clippy --target wasm32v1-none -- -D warnings
+
+      # ── Unit tests (native target — testutils use std) ─────────────────────
+      - name: cargo test
+        working-directory: contracts/escrow
+        run: cargo test
+
+      # ── WASM release build ─────────────────────────────────────────────────
+      - name: cargo build --target wasm32v1-none --release
+        working-directory: contracts/escrow
+        env:
+          SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2: "true"
+        run: cargo build --target wasm32v1-none --release
+
+      # ── Upload WASM artifact ───────────────────────────────────────────────
+      - name: Upload WASM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: stellarflow-escrow-wasm
+          path: contracts/escrow/target/wasm32v1-none/release/stellarflow_escrow.wasm
+          retention-days: 14
