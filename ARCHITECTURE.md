@@ -310,6 +310,104 @@ stellarflow-checkout/
 
 ---
 
+## Soroban Escrow Contract (v0.2)
+
+This section documents the architectural decisions for the Soroban escrow checkout
+mode added in v0.2 on `feat/soroban-escrow`. This is a NEW checkout mode alongside
+the existing Horizon-based flow — it does NOT replace it.
+
+### State machine
+
+```
+        deposit()
+  (new) ─────────▶ Held ──── release() [merchant] ──▶ Released
+                     └───── refund()  [merchant, any time]    ──▶ Refunded
+                     └───── refund()  [payer, after timeout]  ──▶ Refunded
+```
+
+### Auth model
+
+| Function   | Required auth                                         |
+|------------|-------------------------------------------------------|
+| deposit    | payer — must sign the deposit transaction             |
+| release    | merchant — the address recorded at deposit time       |
+| refund     | merchant (any time) OR payer (after timeout only)     |
+| get_escrow | none — read-only simulation, no signature required    |
+
+Auth is enforced by `require_auth()` on the address stored in the escrow record,
+not on a caller argument. This means the contract checks that the *recorded* merchant
+(set immutably at deposit time) has signed the release — a different address cannot
+impersonate the merchant even if they call the function.
+
+### Timeout design
+
+**Duration chosen: 30 days (518,400 ledgers at ~5 s/ledger)**
+
+Reasoning:
+- 30 days covers the longest common fulfilment windows for physical goods and
+  services with delayed delivery (digital downloads are typically fulfilled in
+  seconds; physical goods may take weeks for international shipping).
+- It gives the merchant enough time to fulfil genuinely delayed orders without
+  the customer being able to reclaim funds prematurely.
+- It gives the customer a guaranteed recovery path if the merchant disappears
+  without fulfilling or voluntarily refunding — preventing funds from being
+  permanently locked.
+- The timeout is per-deposit and configurable: callers can pass a custom
+  `timeout_ledgers` value to `deposit()` for shorter (digital download: 7 days /
+  120,960 ledgers) or longer (custom manufacture: 60 days / 1,036,800 ledgers)
+  windows. Pass `0` to use the 30-day default.
+
+The timeout is measured in ledger sequence numbers (not wall-clock time) because
+ledger numbers are canonical on-chain data — they cannot be faked or skewed by
+node clock drift. At 5 s/ledger this is approximately 30 days, but Stellar's
+ledger close time can vary. The `deposited_at` field in the escrow record gives
+both parties the exact ledger at which the timeout starts, so either party can
+calculate the unlock ledger: `deposited_at + timeout_ledgers`.
+
+**Merchant voluntary refund has NO time gate** — a merchant can call `refund()` at
+any time before release, including at ledger 0. This is the explicit voluntary
+cancellation path (e.g. stock out, order cancelled by customer request).
+
+### Out of scope (v0.2)
+
+Explicitly NOT built in this version — see roadmap in README:
+
+- **Third-party arbitration**: no external arbiter role. Disputes beyond
+  "merchant voluntarily refunds" or "payer waits for timeout" require off-chain
+  resolution in v0.2.
+- **Partial releases/refunds**: all-or-nothing per `order_id`. A partial release
+  would require a more complex contract design (splitting the escrow, new state
+  machine) — deferred to a future version.
+
+### TypeScript integration
+
+The `EscrowClient` in `packages/server/src/escrow-session.ts` provides:
+
+- `deposit()` — builds and submits the deposit invocation (payer signs)
+- `release()` — builds and submits the release invocation (merchant signs)
+- `refund()` — builds and submits the refund invocation (payer or merchant signs)
+- `getEscrow()` — reads the on-chain record via contract simulation (no auth)
+
+The `SorobanRpcClient` interface is injected, allowing full mock coverage in tests
+without real network calls. The non-custodial invariant is preserved: all signing
+happens in the caller's wallet — the server never holds keys.
+
+### Session ID → order_id mapping
+
+The escrow contract uses `BytesN<32>` for order IDs. The TypeScript layer derives
+a deterministic 32-byte value from the server's numeric session ID by encoding the
+session ID as a big-endian uint64 left-padded to 32 bytes:
+
+```typescript
+// Session 1 → 000...00000001 (64 hex chars)
+sessionIdToOrderIdHex(1n)
+```
+
+This ensures the same session always produces the same `order_id` on-chain and
+the server can always look up the escrow record for any session.
+
+---
+
 ## Stretch goals / future issues
 
 These are explicitly out of scope for v1 but should be tracked as GitHub issues:
