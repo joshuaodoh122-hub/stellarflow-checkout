@@ -24,7 +24,8 @@ export type PaymentStatus =
   | 'expired'
   | 'underpayment'
   | 'wrong_asset'
-  | 'review_required';
+  | 'review_required'
+  | 'overpaid';    // customer sent more than quoted; merchant received sufficient funds but excess needs reconciliation
 
 /**
  * A checkout session created by the merchant backend.
