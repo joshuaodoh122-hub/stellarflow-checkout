@@ -10,14 +10,39 @@ This project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `overpaid` variant added to `PaymentStatus` union in `packages/core/src/types.ts`.
+- Overpayment detection branch in `matchPayment()` (`packages/core/src/memo-matcher.ts`):
+  when a payment exceeds the quoted amount by more than `amountToleranceStroops`, returns
+  `{ matched: false, status: 'overpaid', reason: '...excess N stroops' }` instead of
+  silently treating it as an exact payment.
+- `payment.overpaid` webhook event type added to `WebhookEvent` union
+  (`packages/server/src/session-manager.ts`), carrying `excessStroops: bigint` alongside
+  `txHash` and `reason`.
+- `markOverpaid()` method added to `SessionManager`: marks session `paid` (order safe to
+  fulfil) and fires both `payment.confirmed` and `payment.overpaid` in sequence.
+- `PaymentProcessor.process()` updated to call `markOverpaid()` for `overpaid` results.
+- Two new tests in `packages/core/src/__tests__/memo-matcher.test.ts`:
+  `flags overpayment: matched:false, status:overpaid, reason includes excess stroops` and
+  `accepts overpayment within tolerance as an exact match`.
+- Two new tests in `packages/server/src/__tests__/payment-pipeline.test.ts` (overpayment
+  suite, replacing the old silent-accept test):
+  `flags overpayment: session is marked paid AND payment.overpaid webhook fires` and
+  `accepts payment within amountToleranceStroops even if amount is slightly over`.
+- Rust/Soroban contract setup note added to `CONTRIBUTING.md` under
+  "Rust/Soroban contract setup" — documents Cargo.lock commit requirement, template
+  `.gitignore` audit step, dependency pinning guidance (`ed25519-dalek` / `soroban-sdk`
+  version-range issue), and CI path-mismatch risk. To be read before escrow contract
+  scaffolding begins (PR 3).
+- `ARCHITECTURE.md` updated: webhook events block includes `payment.overpaid`; review
+  cases table includes overpayment row; overpayment design decision section added.
 - `HorizonPaymentListener` lifecycle and SSE message handler integration tests
   (`horizon-listener-integration.test.ts`) — 22 tests covering `start()`, `stop()`,
   cursor restoration from `CursorStore`, `onmessage` delivery for all payment types,
   non-payment record filtering, memo-fetch failure handling, and `onerror` behaviour.
-- Full SSE→processor→session pipeline tests (`payment-pipeline.test.ts`) — 12
+- Full SSE→processor→session pipeline tests (`payment-pipeline.test.ts`) — 14
   end-to-end tests: XLM/USDC happy path, `amountToleranceStroops`, `submitting`→`paid`
-  in-browser path, underpayment, wrong-asset, expired-quote, duplicate-event, and
-  overpayment scenarios.
+  in-browser path, underpayment, wrong-asset, expired-quote, duplicate-event,
+  overpayment-flagged, and overpayment-within-tolerance scenarios.
 - HTTP integration tests for all 5 checkout API endpoints (`checkout-router.test.ts`)
   using supertest with mocked QuoteService and Horizon.
 - Unit tests for `SessionManager` and `InMemorySessionStore` covering session creation,
@@ -29,7 +54,15 @@ This project uses [Semantic Versioning](https://semver.org/).
 - `CHANGELOG.md` (this file).
 - `EMMY_CHANGELOG.md` — running audit log for all Wave Program review changes.
 
+### Changed
+
+- `matchPayment()` no longer silently accepts overpayments beyond `amountToleranceStroops`.
+  This is a **breaking change for webhook consumers** that rely on the old behaviour:
+  a `payment.confirmed`-only overpayment now produces `payment.confirmed` +
+  `payment.overpaid`. See ARCHITECTURE.md for the design rationale.
+
 ---
+
 
 ## [0.1.0] — 2026-09-28
 

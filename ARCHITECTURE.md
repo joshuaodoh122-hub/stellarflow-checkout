@@ -53,6 +53,11 @@ This document records the key architectural decisions made during the v1 build. 
 // Payment confirmed — safe to fulfil order
 { type: 'payment.confirmed', session: CheckoutSession, txHash: string }
 
+// Payment confirmed AND an overpayment was detected — fulfil the order, then
+// reconcile the excess. excessStroops is the overage in Stellar's base unit (1 XLM = 10,000,000 stroops).
+// This event always follows a payment.confirmed for the same orderId and txHash.
+{ type: 'payment.overpaid', session: CheckoutSession, txHash: string, reason: string, excessStroops: bigint }
+
 // Payment needs manual merchant review
 { type: 'payment.review_required', session: CheckoutSession, txHash: string, reason: string }
 
@@ -65,11 +70,24 @@ This document records the key architectural decisions made during the v1 build. 
 
 **Review cases and recommended merchant action:**
 
-| Case | Webhook type | Recommended action |
-|------|-------------|-------------------|
-| Underpayment | `payment.underpayment` | Contact customer, request top-up or issue refund |
-| Wrong asset | `payment.review_required` | Return funds manually; see refund story below |
-| Expired quote | `payment.review_required` | Verify current price; if acceptable, fulfil manually |
+| Case | Webhook type(s) | Session status | Recommended action |
+|------|----------------|----------------|-------------------|
+| Exact / near-exact payment | `payment.confirmed` | `paid` | Fulfil order immediately |
+| Overpayment (above `amountToleranceStroops`) | `payment.confirmed` + `payment.overpaid` | `paid` | Fulfil order; then refund excess to customer |
+| Underpayment | `payment.underpayment` | `review_required` | Contact customer, request top-up or issue refund |
+| Wrong asset | `payment.review_required` | `review_required` | Return funds manually; see refund story below |
+| Expired quote | `payment.review_required` | `review_required` | Verify current price; if acceptable, fulfil manually |
+
+**Overpayment design decision:**
+
+When a customer sends more than the quoted amount (and the excess is beyond `amountToleranceStroops`), the system takes the following approach:
+
+1. The session is marked **`paid`** — the merchant did receive at least the quoted amount on-chain, so the order is safe to fulfil.
+2. A **`payment.overpaid`** webhook fires (after `payment.confirmed`) carrying `excessStroops` so the merchant's system has an unambiguous signal to initiate a refund for the excess.
+
+This is more conservative than silently accepting (which loses the signal entirely) and more practical than `review_required` (which would block order fulfilment even though the merchant holds sufficient funds). Webhook consumers MUST be prepared to receive both `payment.confirmed` and `payment.overpaid` for the same `orderId`/`txHash` — they arrive in that order.
+
+The `amountToleranceStroops` option exists to absorb tiny rounding differences (e.g. wallet decimal rounding at the 7th decimal place). Both underpayment and overpayment use the same tolerance symmetrically.
 
 ---
 
@@ -209,7 +227,9 @@ This sweep intentionally does not query Horizon for each `txHash` — that would
                                ▼                 ▼
                           webhook              webhook
                      payment.confirmed    payment.review_required
-                                          payment.underpayment
+                     (+ payment.overpaid  payment.underpayment
+                      if excess beyond
+                      tolerance)
 ```
 
 ---

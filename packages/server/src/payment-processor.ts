@@ -66,6 +66,17 @@ export class PaymentProcessor {
 
     if (result.matched) {
       await this.sessionManager.markPaid(session.orderId, event.txHash);
+    } else if (result.status === 'overpaid') {
+      // Extract the excess stroop count from the reason string.
+      // The reason format is: "overpayment: got X, expected Y (excess N stroops)"
+      const excessMatch = (result as { reason: string }).reason.match(/excess (\d+) stroops/);
+      const excessStroops = excessMatch ? BigInt(excessMatch[1]) : 0n;
+      await this.sessionManager.markOverpaid(
+        session.orderId,
+        event.txHash,
+        (result as { reason: string }).reason,
+        excessStroops,
+      );
     } else if (
       result.status === 'review_required' ||
       result.status === 'underpayment' ||
