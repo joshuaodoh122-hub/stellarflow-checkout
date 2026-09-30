@@ -159,6 +159,9 @@ describe('matchPayment — happy path', () => {
     expect(result.matched).toBe(false);
     expect(result.status).toBe('overpaid');
     // 101 XLM − 100 XLM = 1 XLM = 10_000_000 stroops
+    // Assert on the structured typed field — this is the load-bearing value
+    expect((result as { excessStroops: bigint }).excessStroops).toBe(10_000_000n);
+    // Also verify the reason string is still informative (for logging/debugging)
     expect((result as { reason: string }).reason).toContain('10000000 stroops');
   });
 

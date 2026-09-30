@@ -72,10 +72,15 @@ export interface PaymentEvent {
 
 /**
  * Result of matching an incoming PaymentEvent against an open CheckoutSession.
+ *
+ * The 'overpaid' variant carries a structured `excessStroops` field so callers
+ * never need to parse the human-readable `reason` string to recover a financial
+ * value. All other non-match variants carry only `reason: string`.
  */
 export type MatchResult =
   | { matched: true; status: 'paid' }
-  | { matched: false; status: PaymentStatus; reason: string };
+  | { matched: false; status: 'overpaid'; reason: string; excessStroops: bigint }
+  | { matched: false; status: Exclude<PaymentStatus, 'paid' | 'overpaid'>; reason: string };
 
 /**
  * Horizon network passphrase strings (for reference / verification).
