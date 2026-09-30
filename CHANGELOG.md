@@ -10,6 +10,56 @@ This project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Soroban escrow contract** (`contracts/escrow/`) — new Rust/Soroban contract
+  implementing a fund-holding escrow flow for delayed-fulfilment orders:
+  - `deposit(payer, merchant, amount, token, order_id, timeout_ledgers)` — locks
+    funds in the contract, keyed by `order_id`. Rejects duplicate deposits.
+  - `release(order_id)` — merchant-gated; transfers held funds to the merchant.
+  - `refund(order_id, caller)` — merchant (any time) or payer (after timeout);
+    returns held funds to the payer.
+  - `get_escrow(order_id)` — read-only getter returning the full escrow record.
+  - Default timeout: 30 days / 518,400 ledgers. Configurable per-deposit.
+  - 17 Rust tests covering all happy paths and every error path.
+  - `soroban-sdk = "=28.0.0"` pinned. `ed25519-dalek` verified to resolve to
+    2.2.0 (not 3.x) under `^2.0.0` constraint — no additional pin required.
+    See `contracts/escrow/Cargo.toml` for the documented finding.
+
+- **`contracts/escrow/Cargo.lock`** committed (binary/deployable artifact —
+  reproducible builds require it; see CONTRIBUTING.md "Rust/Soroban contract setup").
+
+- **CI workflow** (`.github/workflows/contracts.yml`) — separate from the JS/TS
+  CI; runs on `contracts/**` path changes. Steps: `cargo fmt --check`,
+  `cargo clippy --target wasm32v1-none -- -D warnings`, `cargo test`,
+  `cargo build --target wasm32v1-none --release`. Uploads the WASM artifact.
+
+- **`EscrowCheckoutSession` TypeScript type** and **`EscrowClient`** in
+  `packages/server/src/escrow-session.ts` — new checkout mode alongside the
+  existing Horizon flow:
+  - `EscrowClient.deposit()`, `.release()`, `.refund()`, `.getEscrow()`
+  - `SorobanRpcClient` interface for mock injection in tests
+  - `EscrowClientError` with typed error codes matching the Rust contract
+  - `sessionIdToOrderIdHex()` — deterministic session ID → 32-byte order_id
+  - `escrowRecordToSessionStatus()` — on-chain status → session lifecycle status
+  - 34 TypeScript tests (all mocked, no real network calls)
+
+- **`contracts/escrow/DEPLOY.md`** — deployment guide with real steps and an honest
+  note that no live testnet deployment was performed in this PR.
+
+- **`ARCHITECTURE.md`** — Soroban Escrow Contract section: state machine,
+  auth model, timeout design rationale, TypeScript integration, session ID mapping.
+
+- **`SECURITY.md`** — Soroban escrow trust assumptions section: what the contract
+  guarantees, trust assumptions (key security, no arbitration in v0.2), and
+  confirmation that the non-custodial invariant is maintained.
+
+### Changed
+
+- `README.md` escrow status row: "🔨 In development" → "✅ Built & tested —
+  deploy pending". Roadmap updated to note partial release/arbitration as
+  explicitly out of scope for v0.2.
+
+- `packages/server/src/index.ts` — exports `escrow-session` module.
+
 - `excessStroops: bigint` structured field added to the `'overpaid'` variant of
   `MatchResult` in `packages/core/src/types.ts`. `MatchResult` is now a proper
   3-variant discriminated union; narrowing on `status === 'overpaid'` gives
