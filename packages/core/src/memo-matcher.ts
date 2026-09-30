@@ -219,6 +219,7 @@ export async function matchPayment(
         matched: false,
         status: 'overpaid',
         reason: `overpayment: got ${event.amount}, expected ${session.amount} (excess ${excess} stroops)`,
+        excessStroops: excess,
       };
     }
   }

@@ -10,7 +10,32 @@ This project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- `overpaid` variant added to `PaymentStatus` union in `packages/core/src/types.ts`.
+- `excessStroops: bigint` structured field added to the `'overpaid'` variant of
+  `MatchResult` in `packages/core/src/types.ts`. `MatchResult` is now a proper
+  3-variant discriminated union; narrowing on `status === 'overpaid'` gives
+  `excessStroops` without any cast.
+
+### Changed
+
+- `matchPayment()` overpayment return now includes `excessStroops: excess` directly
+  alongside `reason` — the value is set from the already-computed `excess` bigint.
+- `PaymentProcessor.process()` regex removed entirely. `result.excessStroops` is
+  accessed directly after narrowing on `result.status === 'overpaid'`; no cast required.
+  The `result.reason` and `result.status` accesses in the `review_required` branch also
+  lost their `as` casts — the narrowed type is now precise enough without them.
+- `memo-matcher.test.ts` overpayment test now also asserts
+  `(result as { excessStroops: bigint }).excessStroops === 10_000_000n` on the
+  structured field directly, in addition to the existing reason-string substring check.
+
+### Notes
+
+- Pure refactor — runtime behavior and all existing assertion values are unchanged.
+  216 tests, 11 suites, all pass.
+- Optional follow-up flagged: the underpayment branch has the same pattern
+  (`shortfall` bigint embedded in a reason string, never exposed as a structured field).
+  Consistency would suggest adding `shortfallStroops: bigint` to the `'underpayment'`
+  variant of `MatchResult` in a future pass — not done here per task scope.
+
 - Overpayment detection branch in `matchPayment()` (`packages/core/src/memo-matcher.ts`):
   when a payment exceeds the quoted amount by more than `amountToleranceStroops`, returns
   `{ matched: false, status: 'overpaid', reason: '...excess N stroops' }` instead of
