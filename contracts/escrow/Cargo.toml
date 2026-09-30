@@ -1,0 +1,32 @@
+[package]
+name = "stellarflow-escrow"
+version = "0.1.0"
+edition = "2021"
+description = "StellarFlow escrow Soroban contract — holds funds until merchant release or payer refund"
+license = "MIT"
+repository = "https://github.com/joshuaodoh122-hub/stellarflow-checkout"
+
+# Soroban contracts must be compiled as cdylib (C dynamic library / wasm module)
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# soroban-sdk 28.0.0 — verified 2026-09-30 against crates.io.
+# soroban-env-host 28.0.2 (transitive dep) has ed25519-dalek = "^2.0.0" which
+# in Rust semver means >=2.0.0,<3.0.0. Cargo.lock resolves to 2.2.0. No pin
+# needed because the ^2.0.0 constraint cannot reach 3.x. If Stellar ever bumps
+# this to ^3.0.0 we will need to re-verify here.
+soroban-sdk = "=28.0.0"
+
+[dev-dependencies]
+soroban-sdk = { version = "=28.0.0", features = ["testutils"] }
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true
