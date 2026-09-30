@@ -426,13 +426,49 @@ describe('Horizon payment pipeline — overpayment', () => {
     jest.clearAllMocks();
   });
 
-  it('accepts overpayment (more XLM than quoted)', async () => {
+  it('flags overpayment: session is marked paid (order safe to fulfil) AND payment.overpaid webhook fires', async () => {
     const { session, manager, webhookEvents, listener } = await buildPipeline({
       amount: '100.0000000',
     });
 
     await streamFactory.current.triggerMessage(makeHorizonRecord({
-      amount: '150.0000000', // 50% over
+      amount: '150.0000000', // 50 XLM (500_000_000 stroops) over
+      transaction: async () => ({
+        memo_type: 'id',
+        memo: session.orderId.toString(),
+        created_at: new Date().toISOString(),
+      }),
+    }));
+
+    // Session must be 'paid' — the merchant received enough funds to fulfil the order
+    const updated = await manager.getSession(session.orderId);
+    expect(updated!.status).toBe('paid');
+
+    // Exactly 2 webhook events fired: payment.confirmed first, then payment.overpaid
+    expect(webhookEvents).toHaveLength(2);
+    expect(webhookEvents[0].type).toBe('payment.confirmed');
+    expect(webhookEvents[1].type).toBe('payment.overpaid');
+
+    // The overpaid event must carry the correct excess amount
+    // 150 XLM − 100 XLM = 50 XLM = 500_000_000 stroops
+    const overpaidEvent = webhookEvents[1] as Extract<WebhookEvent, { type: 'payment.overpaid' }>;
+    expect(overpaidEvent.excessStroops).toBe(500_000_000n);
+    expect(overpaidEvent.txHash).toBe(TX_HASH);
+    expect(overpaidEvent.reason).toMatch(/overpayment/);
+    expect(overpaidEvent.reason).toMatch(/500000000 stroops/);
+
+    listener.stop();
+  });
+
+  it('accepts payment within amountToleranceStroops even if amount is slightly over (no overpaid flag)', async () => {
+    const { session, manager, webhookEvents, listener } = await buildPipeline({
+      amount: '100.0000000',
+      toleranceStroops: 10n,
+    });
+
+    // 3 stroops over — within the 10-stroop tolerance
+    await streamFactory.current.triggerMessage(makeHorizonRecord({
+      amount: '100.0000003',
       transaction: async () => ({
         memo_type: 'id',
         memo: session.orderId.toString(),
@@ -442,6 +478,8 @@ describe('Horizon payment pipeline — overpayment', () => {
 
     const updated = await manager.getSession(session.orderId);
     expect(updated!.status).toBe('paid');
+    // Only payment.confirmed — tolerance means no overpaid signal
+    expect(webhookEvents).toHaveLength(1);
     expect(webhookEvents[0].type).toBe('payment.confirmed');
 
     listener.stop();

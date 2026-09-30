@@ -5,6 +5,137 @@ Entries are append-only — never overwritten. Most recent entry at the top.
 
 ---
 
+## 2026-09-30 — PR 3 (pre-escrow): Overpayment fix + Rust/Soroban setup doc
+
+**Branch:** `fix/overpayment-handling`
+**PR:** TBD
+
+### What was changed
+
+**`packages/core/src/types.ts`**
+
+Added `'overpaid'` variant to the `PaymentStatus` union, alongside the existing
+`'underpayment'` and `'review_required'` variants. Style matches existing union.
+
+**`packages/core/src/memo-matcher.ts`**
+
+Added an explicit overpayment branch in `matchPayment()` after the underpayment check
+(step 7, now "Amount checks: underpayment and overpayment"). If `cmp > 0` (event amount
+exceeds session amount) AND the excess exceeds `amountToleranceStroops`, returns:
+
+```typescript
+{ matched: false, status: 'overpaid', reason: `overpayment: got ${event.amount}, expected ${session.amount} (excess ${excess} stroops)` }
+```
+
+The `amountToleranceStroops` guard is applied symmetrically to overpayment — a 1–2 stroop
+rounding excess from wallet decimal handling does not trigger the flag.
+
+Updated module doc comment and `matchPayment` JSDoc to mention overpayment alongside the
+existing non-silent failure rules.
+
+**`packages/server/src/session-manager.ts`**
+
+- Added `payment.overpaid` variant to `WebhookEvent` union, carrying `excessStroops: bigint`.
+- Added `markOverpaid()` method to `SessionManager`: marks session status `'paid'`
+  (merchant received sufficient funds — order is safe to fulfil), then fires
+  `payment.confirmed` followed by `payment.overpaid` in sequence.
+
+**`packages/server/src/payment-processor.ts`**
+
+Updated `PaymentProcessor.process()` to branch on `result.status === 'overpaid'` and call
+`sessionManager.markOverpaid()`, extracting `excessStroops` from the reason string via
+regex (`/excess (\d+) stroops/`).
+
+**`packages/core/src/__tests__/memo-matcher.test.ts`**
+
+Replaced the old `'accepts overpayment'` test (which asserted `matched: true`, proving
+the gap existed) with two new tests:
+
+1. `flags overpayment: matched:false, status:overpaid, reason includes excess stroops`
+   — proves `matchPayment()` returns `status: 'overpaid'` with the correct stroop count
+   (1 XLM = 10,000,000 stroops) for a 101 XLM payment on a 100 XLM session.
+2. `accepts overpayment within tolerance as an exact match`
+   — proves that a 1-stroop excess within a 5-stroop `amountToleranceStroops` still
+   returns `{ matched: true, status: 'paid' }`.
+
+**`packages/server/src/__tests__/payment-pipeline.test.ts`**
+
+Replaced the old `'accepts overpayment (more XLM than quoted)'` test with two new tests
+in the `'Horizon payment pipeline — overpayment'` suite:
+
+1. `flags overpayment: session is marked paid (order safe to fulfil) AND payment.overpaid webhook fires`
+   — end-to-end: 150 XLM payment on a 100 XLM session → session status `'paid'`,
+   exactly 2 webhooks (`payment.confirmed` + `payment.overpaid`), `excessStroops = 500_000_000n`,
+   `txHash` and reason string match.
+2. `accepts payment within amountToleranceStroops even if amount is slightly over (no overpaid flag)`
+   — 3-stroop excess within a 10-stroop tolerance → session `'paid'`, only 1 webhook
+   (`payment.confirmed`), no `payment.overpaid`.
+
+**`ARCHITECTURE.md`**
+
+- Webhook events block updated to include `payment.overpaid` type with full TypeScript
+  signature.
+- Review cases table now includes the overpayment row (`payment.confirmed` +
+  `payment.overpaid`, status `paid`, recommended: "Fulfil order; then refund excess").
+- New "Overpayment design decision" section added explaining the paid+dual-webhook
+  approach and its rationale.
+- Architecture diagram updated to show `payment.overpaid` alongside `payment.confirmed`
+  in the `session.paid` path.
+
+**`CONTRIBUTING.md`**
+
+Added "Rust/Soroban contract setup" section with four items to check before scaffolding
+the escrow contract (PR 3):
+- Commit `Cargo.lock` (binary/deployable artifact — reproducible builds require it).
+- Audit any template `.gitignore` for a `Cargo.lock` exclusion line before committing.
+- Explicit dependency pinning guidance: check whether `ed25519-dalek` needs an
+  upper-bound pin alongside `soroban-sdk` / `soroban-env-host` (loose `>=2.0.0`
+  constraint may resolve to incompatible 3.x) — verify upstream before assuming.
+- CI Rust job path hygiene: do not add `working-directory` unless the crate is actually
+  in a subdirectory; verify paths match reality before considering CI done.
+
+**`CHANGELOG.md`**, **`EMMY_CHANGELOG.md`**
+
+Updated (this file — appended).
+
+### Design decision flagged (affects webhook consumers)
+
+The overpayment handling strategy chosen is **"mark paid + emit additional signal"**:
+
+> When a customer sends more than the quoted amount (excess > `amountToleranceStroops`),
+> the session is marked **`paid`** (the merchant received sufficient funds — order fulfilment
+> is safe) AND a **`payment.overpaid`** webhook fires immediately after `payment.confirmed`,
+> carrying `excessStroops` (bigint) for reconciliation.
+
+This is more conservative than silent acceptance (which loses the signal) and more practical
+than `review_required` (which would block fulfilment even though funds are confirmed). **Webhook
+consumers MUST be prepared to receive `payment.confirmed` + `payment.overpaid` for the same
+`orderId`/`txHash` on overpayments** — they arrive in that order.
+
+### Test count before / after
+
+- Before: 214 tests across 11 suites
+- After: 216 tests across 11 suites (+2 tests)
+
+Breakdown:
+- `memo-matcher.test.ts`: 1 old overpayment test → 2 new overpayment tests (+1)
+- `payment-pipeline.test.ts`: 1 old overpayment test → 2 new overpayment tests (+1)
+
+### Files modified
+
+- `packages/core/src/types.ts`
+- `packages/core/src/memo-matcher.ts`
+- `packages/core/src/__tests__/memo-matcher.test.ts`
+- `packages/server/src/session-manager.ts`
+- `packages/server/src/payment-processor.ts`
+- `packages/server/src/__tests__/payment-pipeline.test.ts`
+- `ARCHITECTURE.md`
+- `CONTRIBUTING.md`
+- `CHANGELOG.md`
+- `EMMY_CHANGELOG.md` (this file — appended)
+
+---
+
 ## 2026-09-29 — PR 2: Horizon flow integration tests (listener lifecycle + full pipeline)
 
 **Branch:** `feat/horizon-flow-tests`

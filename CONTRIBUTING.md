@@ -95,3 +95,73 @@ The memo-matching logic in `core/src/memo-matcher.ts` must maintain high test co
 ## Questions
 
 Open a [GitHub Discussion](https://github.com/joshuaodoh122-hub/stellarflow-checkout/discussions) for questions that aren't bug reports or feature requests.
+
+---
+
+## Rust/Soroban contract setup
+
+**Read this before scaffolding the escrow contract (or any future Soroban crate) in this repo.**
+
+This repo is about to gain its first Rust/Soroban crate. The following are easy-to-miss
+mistakes when setting up a new Rust project inside a JS/TS monorepo. Each one has caused
+real CI failures in Soroban-adjacent projects that were hard to diagnose after the fact.
+
+### 1. Commit `Cargo.lock` — never add it to `.gitignore`
+
+A Soroban smart contract is a **binary/deployable artifact**, not a library intended for
+downstream consumption with version-range flexibility. Reproducible builds require the
+lockfile. Without it, CI resolves dependencies fresh on every run — and if an upstream
+crate publishes a new version that breaks your build, CI fails in a way that does not
+reproduce locally (where a stale local lockfile masks the same issue).
+
+The current `.gitignore` in this repo is pure JS/TS and correctly has no Rust entries.
+Keep it that way. When you run `cargo new` or copy a Soroban template, the default
+`.gitignore` that Cargo generates **does include `Cargo.lock`** (as would be appropriate
+for a library). **Check before committing anything and remove that line if it is present.**
+
+### 2. Audit the template `.gitignore` before your first commit
+
+Steps:
+1. `cargo new contracts/escrow` (or wherever the crate lives)
+2. `cat contracts/escrow/.gitignore` — look for `Cargo.lock`
+3. If present, delete that line. Then `git add Cargo.lock` alongside your first
+   `Cargo.toml` commit.
+
+### 3. Pin dependencies with known version-range problems
+
+Pin explicitly in `Cargo.toml` with a comment rather than discovering it later through a
+failed CI run. In particular:
+
+`soroban-env-host` has historically had a loose `>=2.0.0` constraint on `ed25519-dalek`
+that can resolve to the 3.x series, which has a breaking API change. Some versions of
+`soroban-sdk` pull in `soroban-env-host` transitively. **Verify the current upstream state
+before assuming this is already fixed** — it may be resolved by the time you read this, but
+it may not be. If you see `ed25519-dalek` in your lock file at 3.x and the build fails with
+an API error, this is the cause. Fix by adding an explicit upper-bound pin:
+
+```toml
+# Explicit upper bound: soroban-env-host's >=2.0.0 constraint can resolve to
+# ed25519-dalek 3.x which has a breaking API. Pin to <3 until upstream fixes the
+# constraint. Remove this pin once soroban-env-host publishes a version that
+# requires >=3 explicitly.
+ed25519-dalek = "=2.1.1"
+```
+
+Verify `soroban-sdk` version compatibility at https://github.com/stellar/rs-soroban-sdk
+before choosing a `soroban-sdk` version to pin.
+
+### 4. CI Rust job path hygiene
+
+Do **not** add `working-directory` to a CI job unless the crate genuinely lives in a
+subdirectory — and if you do, verify the path exists before considering CI "done."
+
+A common failure mode: you write a CI YAML with `working-directory: contracts/escrow`
+before the directory exists, or after renaming it. The job looks correct on paper but
+fails on the first run with a confusing "no such file or directory" or "no Cargo.toml
+found" error. Local commands run from wherever you are and don't expose the mismatch.
+
+Before marking CI as done:
+1. Confirm the actual path of `Cargo.toml` relative to the repo root.
+2. Check the `working-directory` in every Rust CI step matches it exactly.
+3. Push a branch and verify the CI run passes — do not assume it will.
+

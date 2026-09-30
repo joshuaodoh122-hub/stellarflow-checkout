@@ -9,8 +9,8 @@
  *   1. If txHash has already been processed → return duplicate, do nothing.
  *   2. Record txHash in the dedup store BEFORE marking the order paid.
  *   3. Validate memo, asset, amount, and quote expiry in that order.
- *   4. Underpayment, wrong-asset, and expired-quote payments are NEVER
- *      auto-accepted — they are flagged as review_required.
+ *   4. Underpayment, wrong-asset, expired-quote, and overpayment payments are
+ *      NEVER auto-accepted — they are flagged accordingly.
  *
  * Persistence: the IdempotencyStore interface is intentionally minimal so
  * callers can back it with an in-memory Map (tests / demo) or a real DB
@@ -111,6 +111,7 @@ export interface MatchPaymentOptions {
  * This function enforces all the non-silent failure rules:
  *  - Expired quotes are flagged, not accepted.
  *  - Underpayments are flagged, not accepted.
+ *  - Overpayments are flagged, not silently absorbed.
  *  - Wrong-asset payments are flagged, not accepted.
  *
  * Idempotency is enforced: a duplicate txHash is silently ignored (returns
@@ -188,21 +189,36 @@ export async function matchPayment(
     };
   }
 
-  // ── 7. Underpayment check ──────────────────────────────────────────────────
+  // ── 7. Amount checks: underpayment and overpayment ────────────────────────
   const cmp = compareAmounts(event.amount, session.amount);
+
+  // Shared stroop converter (local — avoids re-exporting an internal helper)
+  const toStroops = (s: string): bigint => {
+    const [int = '0', dec = ''] = s.split('.');
+    const padded = dec.padEnd(7, '0').slice(0, 7);
+    return BigInt(int) * 10_000_000n + BigInt(padded);
+  };
+
   if (cmp < 0) {
-    // Check if within tolerance
-    const toStroops = (s: string): bigint => {
-      const [int = '0', dec = ''] = s.split('.');
-      const padded = dec.padEnd(7, '0').slice(0, 7);
-      return BigInt(int) * 10_000_000n + BigInt(padded);
-    };
+    // Underpayment: customer sent less than quoted
     const shortfall = toStroops(session.amount) - toStroops(event.amount);
     if (shortfall > amountToleranceStroops) {
       return {
         matched: false,
         status: 'underpayment',
         reason: `underpayment: got ${event.amount}, expected ${session.amount} (shortfall ${shortfall} stroops)`,
+      };
+    }
+  } else if (cmp > 0) {
+    // Overpayment: customer sent more than quoted
+    // We check against amountToleranceStroops for symmetry with underpayment —
+    // a tiny rounding excess (e.g. 1 stroop) should not trigger a flag.
+    const excess = toStroops(event.amount) - toStroops(session.amount);
+    if (excess > amountToleranceStroops) {
+      return {
+        matched: false,
+        status: 'overpaid',
+        reason: `overpayment: got ${event.amount}, expected ${session.amount} (excess ${excess} stroops)`,
       };
     }
   }
