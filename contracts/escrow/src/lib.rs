@@ -1,4 +1,4 @@
-//! StellarFlow Escrow Contract
+//! StellarFlow Escrow Contract 
 //!
 //! Holds funds on behalf of a payer until a merchant releases them (fulfilment)
 //! or either party initiates a refund. This closes the "funds stuck forever"
