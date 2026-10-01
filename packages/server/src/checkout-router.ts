@@ -25,6 +25,7 @@ import {
   Operation,
   Asset as StellarAsset,
   Memo,
+  StrKey,
 } from 'stellar-sdk';
 import {
   sessionToSep0007Uri,
@@ -45,11 +46,17 @@ export interface CheckoutRouterOptions {
   merchantAddress: string;
   network: StellarNetwork;
   originDomain?: string;
+  /**
+   * When set, the GET /api/sessions endpoint requires
+   * `Authorization: Bearer <sessionsApiKey>` on every request.
+   * If omitted the endpoint remains open (acceptable for local demo use).
+   */
+  sessionsApiKey?: string;
 }
 
 export function createCheckoutRouter(opts: CheckoutRouterOptions): Router {
   const router = Router();
-  const { sessionManager, quoteService, merchantAddress, network, originDomain } = opts;
+  const { sessionManager, quoteService, merchantAddress, network, originDomain, sessionsApiKey } = opts;
 
   // Horizon server instance — shared for tx submission
   const horizonServer = new StellarHorizon.Server(HORIZON_URLS[network]);
@@ -184,7 +191,7 @@ export function createCheckoutRouter(opts: CheckoutRouterOptions): Router {
       }
 
       const { customerAddress } = req.body as { customerAddress?: unknown };
-      if (typeof customerAddress !== 'string' || !customerAddress.startsWith('G')) {
+      if (typeof customerAddress !== 'string' || !StrKey.isValidEd25519PublicKey(customerAddress)) {
         res.status(400).json({ error: 'customerAddress must be a valid Stellar public key (G...)' });
         return;
       }
@@ -382,6 +389,14 @@ export function createCheckoutRouter(opts: CheckoutRouterOptions): Router {
   // ─── GET /api/sessions ────────────────────────────────────────────────────
 
   router.get('/sessions', async (_req: Request, res: Response) => {
+    // If a sessionsApiKey is configured, require Bearer token auth.
+    if (sessionsApiKey) {
+      const auth = _req.headers['authorization'];
+      if (!auth || auth !== `Bearer ${sessionsApiKey}`) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+    }
     try {
       const sessions = await sessionManager.listSessions();
       res.json({

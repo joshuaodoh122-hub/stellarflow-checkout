@@ -157,75 +157,38 @@ export interface SorobanRpcClient {
  *
  * In tests this class is NOT used — the `SorobanRpcClient` interface is
  * injected directly so no network calls are made.
+ *
+ * TODO(escrow-v1): Implement the full simulate → assemble footprint → sign → submit
+ * flow using @stellar/stellar-sdk's SorobanRpc client. Until then this class
+ * throws explicitly so callers get a clear error rather than a confusing RPC failure.
  */
 export class HttpSorobanRpcClient implements SorobanRpcClient {
-  private readonly rpcUrl: string;
-
-  constructor(rpcUrl: string) {
-    this.rpcUrl = rpcUrl;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  constructor(_rpcUrl: string) {
+    // rpcUrl will be used once the full implementation is in place
   }
 
-  async invokeContract(params: {
+  async invokeContract(_params: {
     contractId: string;
     method: string;
     args: unknown[];
     signerAddress: string;
   }): Promise<{ txHash: string; status: 'success' | 'failed'; errorCode?: number }> {
-    // Real implementation would:
-    // 1. Build a Soroban invoke-contract operation
-    // 2. Simulate to get the footprint and fee
-    // 3. Return the unsigned XDR for the wallet to sign
-    // 4. Wait for the signed XDR and submit it
-    //
-    // For v0.2, the actual wallet-signing flow is handled by the EscrowCheckoutRouter
-    // endpoints (similar to how checkout-router.ts handles tx building for Horizon).
-    // This stub represents the full invoke flow for testing purposes.
-    const response = await fetch(this.rpcUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'simulateTransaction',
-        params: {
-          transaction: JSON.stringify({ contractId: params.contractId, method: params.method, args: params.args }),
-        },
-      }),
-    });
-    if (!response.ok) {
-      throw new Error(`Soroban RPC error: ${response.status} ${response.statusText}`);
-    }
-    const data = await response.json() as { result?: { status?: string; transactionHash?: string; error?: { code: number } } };
-    const result = data.result ?? {};
-    return {
-      txHash: result.transactionHash ?? '',
-      status: result.status === 'SUCCESS' ? 'success' : 'failed',
-      errorCode: result.error?.code,
-    };
+    throw new Error(
+      'HttpSorobanRpcClient.invokeContract is not yet implemented. ' +
+      'See TODO(escrow-v1) in escrow-session.ts.',
+    );
   }
 
-  async simulateContract(params: {
+  async simulateContract(_params: {
     contractId: string;
     method: string;
     args: unknown[];
   }): Promise<{ result: unknown }> {
-    const response = await fetch(this.rpcUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'simulateTransaction',
-        params: {
-          transaction: JSON.stringify({ contractId: params.contractId, method: params.method, args: params.args }),
-        },
-      }),
-    });
-    if (!response.ok) {
-      throw new Error(`Soroban RPC error: ${response.status} ${response.statusText}`);
-    }
-    const data = await response.json() as { result?: { retval?: unknown } };
-    return { result: data.result?.retval };
+    throw new Error(
+      'HttpSorobanRpcClient.simulateContract is not yet implemented. ' +
+      'See TODO(escrow-v1) in escrow-session.ts.',
+    );
   }
 }
 

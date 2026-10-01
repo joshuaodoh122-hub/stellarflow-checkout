@@ -8,7 +8,7 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "lint": "eslint 'packages/*/src/**/*.ts'",
+    "lint": "eslint 'packages/*/src/**/*.ts' 'packages/widget/src/**/*.js'",
     "typecheck": "tsc --build",
     "test": "jest --passWithNoTests",
     "test:coverage": "jest --coverage --passWithNoTests",
