@@ -3,10 +3,8 @@ module.exports = {
   projects: [
     '<rootDir>/packages/core',
     '<rootDir>/packages/server',
+    '<rootDir>/packages/widget',
   ],
   coverageDirectory: '<rootDir>/coverage',
-  collectCoverageFrom: [
-    'packages/*/src/**/*.ts',
-    '!packages/*/src/**/*.d.ts',
-  ],
+  coverageProvider: 'v8',
 };
