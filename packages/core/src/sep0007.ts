@@ -1,4 +1,4 @@
-/**
+/** 
  * sep0007.ts
  *
  * SEP-0007 payment URI generation and QR code rendering.
