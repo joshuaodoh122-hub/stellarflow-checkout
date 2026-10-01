@@ -3,7 +3,7 @@ name = "stellarflow-escrow"
 version = "0.1.0"
 edition = "2021"
 description = "StellarFlow escrow Soroban contract — holds funds until merchant release or payer refund"
-license = "MIT"
+license = "MIT" 
 repository = "https://github.com/joshuaodoh122-hub/stellarflow-checkout"
 
 # Soroban contracts must be compiled as cdylib (C dynamic library / wasm module)
