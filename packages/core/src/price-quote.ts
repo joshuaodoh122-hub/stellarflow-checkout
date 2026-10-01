@@ -1,4 +1,4 @@
-/**
+/** 
  * price-quote.ts
  *
  * Price quoting interface + CoinGecko v3 adapter.
