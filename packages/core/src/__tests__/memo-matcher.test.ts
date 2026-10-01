@@ -7,7 +7,7 @@
 
 import {
   matchPayment,
-  InMemoryIdempotencyStore,
+  InMemoryIdempotencyStore, 
   assetsEqual,
   compareAmounts,
 } from '../memo-matcher';
