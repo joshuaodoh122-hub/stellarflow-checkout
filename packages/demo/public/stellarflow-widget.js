@@ -63,7 +63,7 @@ var StellarFlow=(()=>{var wc=Object.create;var xn=Object.defineProperty;var yc=O
   .stellar-wallets-kit sub,
   .stellar-wallets-kit sup {
     font-size: 75%;
-    line-height: 0;
+    line-height: 0; 
     position: relative;
     vertical-align: baseline;
   }
