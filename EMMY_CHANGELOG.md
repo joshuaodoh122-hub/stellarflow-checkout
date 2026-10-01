@@ -5,6 +5,96 @@ Entries are append-only — never overwritten. Most recent entry at the top.
 
 ---
 
+## 2026-10-01 — Fix: ESLint CI failure (9 unused-vars errors across 3 test files)
+
+**Branch:** `fix/eslint-unused-vars`
+**PR:** open — do not merge without explicit approval
+
+### What was changed
+
+The `npm run lint` step (`eslint 'packages/*/src/**/*.ts'`) had been failing on all
+branches with 9 `@typescript-eslint/no-unused-vars` errors. The failure was
+pre-existing and branch-independent — identical on `main`, `feat/soroban-escrow`, and
+every other branch where CI ran.
+
+**`packages/server/src/__tests__/checkout-router.test.ts`**
+
+- Removed unused `Keypair` import (line 30 — imported from `stellar-sdk` but never
+  referenced in the file body)
+- Removed unused `USDC_ISSUER` constant (line 40 — declared but never referenced;
+  `MERCHANT` is used where it would have applied)
+- Removed dead `txBuilderModule` assignment in the `POST /api/checkout/:orderId/tx`
+  describe block (line 293 — `jest.requireActual('../tx-builder')` was called and
+  assigned but the variable was never read; `jest.resetModules()` in `beforeEach` is
+  sufficient on its own)
+
+**`packages/server/src/__tests__/payment-pipeline.test.ts`**
+
+- Removed dead IIFE at line 245 that destructured `{ session, manager, store }` into
+  variables that were immediately shadowed by fresh `sessionStore`, `mgr`, `processor`
+  declarations on the very next lines. The IIFE had no side effects and its return
+  value was entirely unused.
+
+**`packages/server/src/__tests__/tx-builder.test.ts`**
+
+- Removed `Asset`, `Memo`, `Account` from the top-level `stellar-sdk` import (lines
+  16, 18, 19). These three are referenced only as `actual.Asset`, `actual.Account`
+  etc. inside the `jest.mock('stellar-sdk', ...)` factory callback — they were never
+  used at module scope.
+
+No logic was changed. All deletions are dead declarations with no effect on test
+behaviour.
+
+### Verification
+
+Ran locally against Node 24 after `npm ci`:
+
+| Step | Result |
+|------|--------|
+| `npm run lint` | ✅ exit 0, no errors |
+| `npm run typecheck` | ✅ exit 0, clean |
+| `npm run test:coverage` | ✅ 250/250 tests, 12 suites |
+
+Test count unchanged at 250 — no tests were removed or added.
+
+### Files modified
+
+- `packages/server/src/__tests__/checkout-router.test.ts`
+- `packages/server/src/__tests__/payment-pipeline.test.ts`
+- `packages/server/src/__tests__/tx-builder.test.ts`
+- `EMMY_CHANGELOG.md` (this file — appended)
+
+---
+
+## 2026-10-01 — CI diagnosis: JS/TS lint failure root-cause identification
+
+**Branch:** n/a (read-only investigation — no code changes)
+
+### What was identified
+
+Investigated a reported CI failure. The `Contracts CI` workflow (Rust/Soroban) was
+passing on all branches. The `CI` workflow (JS/TS) was failing on all branches
+including `main`.
+
+**Root cause:** `npm run lint` exits 1 due to 9 `@typescript-eslint/no-unused-vars`
+errors across 3 test files (see fix entry above). The failure is pre-existing and
+cross-branch — not introduced by any single branch or PR.
+
+**Evidence:** GitHub Actions run logs retrieved via API for both
+`feat/soroban-escrow` (run `36728221075`) and `main` (run `36728276089`). Identical
+9 errors in both. Lint step fails; Typecheck and Test steps are skipped on both Node
+18.x and 20.x matrix legs.
+
+**Escrow contract status confirmed unaffected:** `Contracts CI` run `36728220943`
+on `feat/soroban-escrow` completed with `success`. The Rust workflow is path-filtered
+to `contracts/**` and runs independently of the JS/TS `ci.yml`.
+
+### Files modified
+
+- `EMMY_CHANGELOG.md` (this file — appended)
+
+---
+
 ## 2026-09-30 — Soroban escrow contract + TypeScript integration (v0.2)
 
 **Branch:** `feat/soroban-escrow`
