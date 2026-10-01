@@ -242,13 +242,6 @@ describe('Horizon payment pipeline — successful payment', () => {
   });
 
   it('confirms payment when session is in submitting state (in-browser path)', async () => {
-    const { session, manager, store } = (() => {
-      // need access to internal store to set status manually
-      const s = new InMemorySessionStore();
-      const mgr = new SessionManager(s);
-      return { session: null as unknown, manager: mgr, store: s };
-    })();
-
     // Re-build with access to store
     const sessionStore = new InMemorySessionStore();
     const idempotencyStore = new InMemoryIdempotencyStore();
