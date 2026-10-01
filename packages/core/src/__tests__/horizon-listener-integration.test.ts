@@ -1,5 +1,5 @@
 /**
- * horizon-listener-integration.test.ts
+ * horizon-listener-integration.test.ts 
  *
  * Tests for HorizonPaymentListener start/stop lifecycle, cursor restoration,
  * and SSE stream subscription behaviour. The stellar-sdk Horizon.Server is
