@@ -17,6 +17,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import rateLimit from 'express-rate-limit';
 import path from 'path';
 import {
   HorizonPaymentListener,
@@ -41,6 +42,12 @@ const MERCHANT_ADDRESS =
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const ORIGIN_DOMAIN = process.env.ORIGIN_DOMAIN ?? `localhost:${PORT}`;
 const QUOTE_TTL_MS = parseInt(process.env.QUOTE_TTL_MS ?? '180000', 10);
+// Optional: restrict GET /api/sessions to Bearer token auth.
+// Leave unset in local dev to keep the endpoint open.
+const SESSIONS_API_KEY = process.env.SESSIONS_API_KEY;
+// Optional: restrict CORS to a specific origin (e.g. "https://yourstore.com").
+// Defaults to same-origin (false) in production; set to "*" only for local dev.
+const CORS_ORIGIN = process.env.CORS_ORIGIN ?? false;
 
 // File used to persist the Horizon cursor across restarts.
 // Override via CURSOR_FILE env var; defaults to a file in the project root.
@@ -107,7 +114,20 @@ const listener = new HorizonPaymentListener(MERCHANT_ADDRESS, {
 
 const app = express();
 
-app.use(cors());
+// CORS — restrict to configured origin (same-origin by default).
+// Set CORS_ORIGIN=* in .env only for local cross-origin development.
+app.use(cors({ origin: CORS_ORIGIN }));
+
+// Rate limiting — 60 requests per minute per IP across all API routes.
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' },
+});
+app.use('/api', apiLimiter);
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
 
@@ -118,6 +138,7 @@ const checkoutRouter = createCheckoutRouter({
   merchantAddress: MERCHANT_ADDRESS,
   network: NETWORK,
   originDomain: ORIGIN_DOMAIN,
+  sessionsApiKey: SESSIONS_API_KEY,
 });
 
 app.use('/api', checkoutRouter);

@@ -57,7 +57,7 @@ let kitUnsubs = [];
  * Initialize the kit once — it is a singleton, shared across all widget
  * instances on the page. Must be called in a browser context.
  */
-function ensureKitInit(networkPassphrase) {
+function ensureKitInit(_networkPassphrase) {
   if (kitInitialized) return;
   kitInitialized = true;
 
@@ -492,7 +492,7 @@ class StellarFlowWidget {
   async handleInBrowserPay() {
     if (!connectedAddress) return;
 
-    const { orderId, quote } = this.sessionData;
+    const { orderId } = this.sessionData;
     const payBtn = document.getElementById(`sf-pay-btn-${orderId}`);
     const statusEl = document.getElementById(`sf-status-${orderId}`);
 
