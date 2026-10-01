@@ -1,5 +1,5 @@
 /**
- * horizon-listener.ts
+ * horizon-listener.ts 
  *
  * Horizon SSE-based payment listener.
  *
