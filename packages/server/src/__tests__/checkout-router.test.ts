@@ -27,7 +27,6 @@ import {
   Operation,
   Memo,
   Account,
-  Keypair,
 } from 'stellar-sdk';
 import { createCheckoutRouter } from '../checkout-router';
 import { SessionManager, InMemorySessionStore } from '../session-manager';
@@ -37,7 +36,6 @@ import { QuoteService, CoinGeckoPriceSource } from '@stellarflow/core';
 
 const MERCHANT = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
 const CUSTOMER = 'GCEYYRVII3YXJEPAO23Z65S4CYVT3OZUYXUHEU6UHBGKFZANXI77SXW7';
-const USDC_ISSUER = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
 const NETWORK = 'testnet' as const;
 const NETWORK_PASSPHRASE = Networks.TESTNET;
 
@@ -290,8 +288,6 @@ describe('GET /api/checkout/:orderId', () => {
 describe('POST /api/checkout/:orderId/tx', () => {
   // tx endpoint calls Horizon to load the customer account — we mock it.
   // We do this by mocking the buildPaymentTx module.
-  const txBuilderModule = jest.requireActual('../tx-builder');
-
   beforeEach(() => {
     jest.resetModules();
   });
