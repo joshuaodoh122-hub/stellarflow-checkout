@@ -4,7 +4,7 @@ This guide covers deploying the `stellarflow-escrow` Soroban contract to Stellar
 testnet (for development) or mainnet (for production).
 
 > ⚠️ **Mainnet deployment involves real funds. There is no undo.**
-> Always test thoroughly on testnet first.
+> Always test thoroughly on testnet first. 
 
 ---
 
