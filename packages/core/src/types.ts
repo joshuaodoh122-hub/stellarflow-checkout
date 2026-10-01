@@ -1,4 +1,4 @@
-/**
+/** 
  * Shared types for StellarFlow Checkout core.
  *
  * Memo scheme decision: we use MEMO_ID (uint64) for order correlation.
