@@ -4,7 +4,7 @@ name: Contracts CI
 # Does NOT run the JS/TS suite — that stays in ci.yml.
 # Runs on any push/PR that touches contracts/** to keep the JS/TS matrix fast.
 
-on:
+on: 
   push:
     branches: [main, develop, "feat/**", "fix/**"]
     paths:
