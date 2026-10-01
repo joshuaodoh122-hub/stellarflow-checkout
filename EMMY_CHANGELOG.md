@@ -5,6 +5,190 @@ Entries are append-only — never overwritten. Most recent entry at the top.
 
 ---
 
+## 2026-10-01 — Quality fixes: auth, validation, coverage, escrow stub, widget, lint (v0.3)
+
+**Branch:** `feat/quality-fixes-v0.3`
+**PR:** open — do not merge without explicit approval
+
+### What was changed
+
+Six quality issues identified in the repo review were fixed in a single pass.
+All changes are backwards-compatible — no public API was broken.
+
+---
+
+#### 1. `no-explicit-any` rule promoted to `error`
+
+**File:** `.eslintrc.json`
+
+`"@typescript-eslint/no-explicit-any"` changed from `"warn"` to `"error"`. Future
+careless `any` usage now fails CI rather than silently passing. The one legitimate
+`any` cast in `horizon-listener.ts` (the Horizon SDK stream type workaround) already
+had an `eslint-disable-next-line` comment — no source change needed there.
+
+---
+
+#### 2. `customerAddress` validation strengthened
+
+**Files:** `packages/server/src/checkout-router.ts`,
+`packages/server/src/__tests__/checkout-router.test.ts`
+
+`!customerAddress.startsWith('G')` replaced with
+`!StrKey.isValidEd25519PublicKey(customerAddress)`. The old check accepted any
+56-character string beginning with G, including keys with invalid checksums that
+would fail when Horizon tried to load the account. `StrKey` was already imported
+from `stellar-sdk` — one line change.
+
+Added `StrKey` to the import and one new test:
+- `returns 400 when customerAddress starts with G but fails StrKey checksum`
+
+---
+
+#### 3. Coverage tooling fixed — output was empty
+
+**Files:** `jest.config.js`, `packages/core/jest.config.js`,
+`packages/server/jest.config.js`
+
+Root cause: `coverageProvider` and `collectCoverageFrom` in the root config are
+not propagated to project sub-configs in Jest's `projects` mode. The root
+`collectCoverageFrom` with `packages/*/src/**` paths was a no-op.
+
+Fixes applied:
+- Added `collectCoverageFrom: ['src/**/*.ts', '!src/**/*.d.ts', '!src/**/__tests__/**']`
+  to `packages/server/jest.config.js` (core already had it)
+- Moved `coverageProvider: 'v8'` to the root `jest.config.js` (correct location)
+- Removed the no-op `collectCoverageFrom` from root config
+
+Coverage is now live. Result: **86% overall** (core/src: 95%, server/src: 93%,
+widget/src: 61%).
+
+---
+
+#### 4. `/api/sessions` auth + CORS restriction
+
+**Files:** `packages/server/src/checkout-router.ts`,
+`packages/server/src/__tests__/checkout-router.test.ts`,
+`packages/demo/src/server.ts`, `packages/demo/package.json`
+
+`CheckoutRouterOptions` gains an optional `sessionsApiKey?: string` field. When set,
+`GET /api/sessions` requires `Authorization: Bearer <key>`. When unset the endpoint
+remains open (demo behaviour unchanged without configuration).
+
+Demo server changes:
+- `cors()` replaced with `cors({ origin: process.env.CORS_ORIGIN ?? false })` —
+  same-origin by default, overridable for local dev
+- `express-rate-limit` added (60 req/min per IP on `/api` prefix)
+- `SESSIONS_API_KEY` and `CORS_ORIGIN` read from environment
+- `sessionsApiKey` passed through to `createCheckoutRouter`
+
+`express-rate-limit@^7.1.5` added to `packages/demo/package.json` dependencies.
+
+Three new tests added to `checkout-router.test.ts`:
+- `returns 401 when sessionsApiKey is set and no Authorization header is provided`
+- `returns 401 when sessionsApiKey is set and wrong token is provided`
+- `returns 200 when sessionsApiKey is set and correct token is provided`
+
+---
+
+#### 5. `HttpSorobanRpcClient` stub made honest
+
+**File:** `packages/server/src/escrow-session.ts`
+
+The stub previously made a real `fetch` call with a malformed Soroban RPC payload,
+which would produce a confusing error at runtime. Both `invokeContract` and
+`simulateContract` now throw `Error('HttpSorobanRpcClient.X is not yet implemented —
+see TODO(escrow-v1)')` immediately. Callers get a clear message rather than a
+network error. The `TODO(escrow-v1)` marker is retained for the eventual real
+implementation.
+
+No test changes needed — `escrow-session.test.ts` injects a mock `SorobanRpcClient`
+and never reaches `HttpSorobanRpcClient`.
+
+---
+
+#### 6. Widget: ESLint coverage + tests
+
+**Files:** `.eslintrc.json`, `packages/widget/src/widget.js`,
+`packages/widget/jest.config.js` (new),
+`packages/widget/src/__tests__/widget.test.js` (new),
+`packages/widget/src/__tests__/__mocks__/stellar-wallets-kit.js` (new),
+`packages/widget/package.json`, `jest.config.js`, `package.json`
+
+**ESLint:**
+- `ignorePatterns` changed from `["*.js", "*.cjs"]` to targeted exclusions
+  (`*.config.js`, `*.config.cjs`, `*.cjs`, `packages/widget/scripts/**`,
+  `packages/demo/public/**`)
+- Added two `overrides`: one for `widget.js` (browser env, `eslint:recommended`)
+  and one for `widget/__tests__/**/*.js` (jest + browser env)
+- Lint script updated to include `packages/widget/src/**/*.js`
+- Two real bugs exposed and fixed: unused `networkPassphrase` parameter
+  (renamed to `_networkPassphrase`) and unused `quote` destructure in
+  `handleInBrowserPay` (removed from destructure)
+
+**Tests:** `packages/widget/jest.config.js` added (jsdom, babel-jest, wallet kit
+mock). `packages/widget` added to root `projects` array. 7 new tests:
+
+| Test | Suite |
+|------|-------|
+| Finds all `[data-stellarflow]` containers and renders a button | `init()` |
+| Does not render into container missing `data-api-url` | `init()` |
+| Respects a custom CSS selector | `init()` |
+| Renders into multiple containers without cross-contamination | `init()` |
+| Injects a Pay button into the container | `StellarFlowWidget.render()` |
+| Dispatches `stellarflow:error` when checkout API fails | `StellarFlowWidget.render()` |
+| (mock file) | — |
+
+`@babel/core`, `@babel/preset-env`, `babel-jest`, `jest`, `jest-environment-jsdom`
+added to `packages/widget` devDependencies.
+
+---
+
+### Verification
+
+| Step | Result |
+|------|--------|
+| `npm run lint` | ✅ exit 0, clean |
+| `npm run typecheck` | ✅ exit 0, clean |
+| `npm run test:coverage` | ✅ 260/260 tests, 13 suites |
+
+**Coverage (now live):**
+
+| Package | Statements | Branch | Functions | Lines |
+|---------|-----------|--------|-----------|-------|
+| core/src | 95% | 89% | 94% | 95% |
+| server/src | 93% | 88% | 92% | 93% |
+| widget/src | 61% | 70% | 50% | 61% |
+| **Overall** | **86%** | **87%** | **83%** | **86%** |
+
+### Test count before / after
+
+- Before: 250 tests, 12 suites
+- After: 260 tests, 13 suites (+10 tests across checkout-router and widget)
+
+### Files created / modified
+
+**Created:**
+- `packages/widget/jest.config.js`
+- `packages/widget/src/__tests__/widget.test.js`
+- `packages/widget/src/__tests__/__mocks__/stellar-wallets-kit.js`
+
+**Modified:**
+- `.eslintrc.json`
+- `jest.config.js`
+- `package.json`
+- `packages/core/jest.config.js`
+- `packages/server/jest.config.js`
+- `packages/server/src/checkout-router.ts`
+- `packages/server/src/__tests__/checkout-router.test.ts`
+- `packages/server/src/escrow-session.ts`
+- `packages/demo/src/server.ts`
+- `packages/demo/package.json`
+- `packages/widget/src/widget.js`
+- `packages/widget/package.json`
+- `EMMY_CHANGELOG.md` (this file — appended)
+
+---
+
 ## 2026-10-01 — Fix: ESLint CI failure (9 unused-vars errors across 3 test files)
 
 **Branch:** `fix/eslint-unused-vars`

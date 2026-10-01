@@ -6,10 +6,17 @@
   "scripts": {
     "build": "node scripts/build.js",
     "postbuild": "cp dist/stellarflow-widget.js ../demo/public/stellarflow-widget.js && echo '📋 Copied to demo/public/'",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "test": "jest"
   },
   "devDependencies": {
-    "esbuild": "^0.20.0"
+    "esbuild": "^0.20.0",
+    "@babel/core": "^7.24.0",
+    "@babel/preset-env": "^7.24.0",
+    "babel-jest": "^29.7.0",
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0",
+    "@types/jest": "^29.5.0"
   },
   "license": "MIT",
   "dependencies": {

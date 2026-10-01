@@ -340,6 +340,23 @@ describe('POST /api/checkout/:orderId/tx', () => {
     expect(res.body.error).toContain('customerAddress');
   });
 
+  it('returns 400 when customerAddress starts with G but fails StrKey checksum', async () => {
+    const { app } = buildApp();
+
+    const create = await request(app)
+      .post('/api/checkout')
+      .send({ fiatAmount: 10, assetCode: 'XLM' })
+      .expect(201);
+
+    // Starts with G and is 56 chars but has an invalid checksum — passes the
+    // old startsWith('G') check but must fail StrKey.isValidEd25519PublicKey()
+    const res = await request(app)
+      .post(`/api/checkout/${create.body.orderId}/tx`)
+      .send({ customerAddress: 'GBADKEYBADKEYBADKEYBADKEYBADKEYBADKEYBADKEYBADKEYBADKEY2' })
+      .expect(400);
+    expect(res.body.error).toContain('customerAddress');
+  });
+
   it('returns 409 when session is not pending', async () => {
     const { app, manager } = buildApp();
 
@@ -581,6 +598,81 @@ describe('GET /api/sessions', () => {
     expect(s).toHaveProperty('amount');
     expect(s).toHaveProperty('expiresAt');
     expect(s).toHaveProperty('network');
+  });
+
+  it('returns 401 when sessionsApiKey is set and no Authorization header is provided', async () => {
+    const store = new InMemorySessionStore();
+    const manager = new SessionManager(store);
+    const mockSource = {
+      name: 'mock',
+      getUsdPrice: jest.fn(async (code: 'XLM' | 'USDC') => (code === 'XLM' ? 0.1 : 1.0)),
+    };
+    const quoteService = new QuoteService(mockSource as unknown as CoinGeckoPriceSource);
+    const router = createCheckoutRouter({
+      sessionManager: manager,
+      quoteService,
+      merchantAddress: MERCHANT,
+      network: NETWORK,
+      sessionsApiKey: 'supersecret',
+    });
+    const app = express();
+    app.use(express.json());
+    app.use('/api', router);
+
+    const res = await request(app).get('/api/sessions').expect(401);
+    expect(res.body.error).toContain('Unauthorized');
+  });
+
+  it('returns 401 when sessionsApiKey is set and wrong token is provided', async () => {
+    const store = new InMemorySessionStore();
+    const manager = new SessionManager(store);
+    const mockSource = {
+      name: 'mock',
+      getUsdPrice: jest.fn(async (code: 'XLM' | 'USDC') => (code === 'XLM' ? 0.1 : 1.0)),
+    };
+    const quoteService = new QuoteService(mockSource as unknown as CoinGeckoPriceSource);
+    const router = createCheckoutRouter({
+      sessionManager: manager,
+      quoteService,
+      merchantAddress: MERCHANT,
+      network: NETWORK,
+      sessionsApiKey: 'supersecret',
+    });
+    const app = express();
+    app.use(express.json());
+    app.use('/api', router);
+
+    const res = await request(app)
+      .get('/api/sessions')
+      .set('Authorization', 'Bearer wrongtoken')
+      .expect(401);
+    expect(res.body.error).toContain('Unauthorized');
+  });
+
+  it('returns 200 when sessionsApiKey is set and correct token is provided', async () => {
+    const store = new InMemorySessionStore();
+    const manager = new SessionManager(store);
+    const mockSource = {
+      name: 'mock',
+      getUsdPrice: jest.fn(async (code: 'XLM' | 'USDC') => (code === 'XLM' ? 0.1 : 1.0)),
+    };
+    const quoteService = new QuoteService(mockSource as unknown as CoinGeckoPriceSource);
+    const router = createCheckoutRouter({
+      sessionManager: manager,
+      quoteService,
+      merchantAddress: MERCHANT,
+      network: NETWORK,
+      sessionsApiKey: 'supersecret',
+    });
+    const app = express();
+    app.use(express.json());
+    app.use('/api', router);
+
+    const res = await request(app)
+      .get('/api/sessions')
+      .set('Authorization', 'Bearer supersecret')
+      .expect(200);
+    expect(res.body.sessions).toEqual([]);
   });
 });
 
