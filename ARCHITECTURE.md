@@ -1,6 +1,6 @@
 # StellarFlow Checkout — Architecture
 
-This document records the key architectural decisions made during the v1 build. These are not defaults — each choice was made deliberately and documented here so they can be revisited with full context.
+This document records the key architectural decisions made during the v1 build. These are not defaults — each choice was made deliberately and documented here so they can be revisited with full context. 
 
 ---
 
