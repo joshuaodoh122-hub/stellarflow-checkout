@@ -2,7 +2,7 @@
 
 All notable changes to StellarFlow Checkout are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
-This project uses [Semantic Versioning](https://semver.org/).
+This project uses [Semantic Versioning](https://semver.org/). 
 
 ---
 
