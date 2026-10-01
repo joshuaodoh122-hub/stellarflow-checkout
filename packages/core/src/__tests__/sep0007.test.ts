@@ -3,7 +3,7 @@
  */
 
 import { buildSep0007Uri, sessionToSep0007Uri } from '../sep0007';
-import type { CheckoutSession } from '../types';
+import type { CheckoutSession } from '../types'; 
 
 const MERCHANT = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
 const USDC_ISSUER = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
