@@ -304,7 +304,7 @@ with the Rust toolchain installed.
 - `README.md`
 - `SECURITY.md`
 - `ARCHITECTURE.md`
-- `EMMY_CHANGELOG.md` (this file — appended)
+- `CHANGELOG.md` (this file — appended)
 
 ---
 
@@ -428,7 +428,7 @@ cargo test
 - `README.md` — "Two checkout modes" section added near top; "Soroban status" section rewritten; "How to run the testnet proof" added; contradiction ("not yet integrated" vs "Built & tested") resolved
 - `ARCHITECTURE.md` — "Soroban escrow data flow" section appended: sequence diagram, non-custodial split table, XDR validation steps, session lifecycle, contract error mapping
 - `SECURITY.md` — "Soroban escrow threat model" section appended: XDR substitution, deposit replay, merchant key handling, timeout semantics, session persistence, rate limiting
-- `EMMY_CHANGELOG.md` — this entry
+- `CHANGELOG.md` — this entry
 
 **Claim verification:** Every claim in the updated docs is matched to a test or the honest "not yet run" disclosure:
 
@@ -624,7 +624,7 @@ added to `packages/widget` devDependencies.
 - `packages/demo/package.json`
 - `packages/widget/src/widget.js`
 - `packages/widget/package.json`
-- `EMMY_CHANGELOG.md` (this file — appended)
+- `CHANGELOG.md` (this file — appended)
 
 ---
 
@@ -685,7 +685,7 @@ Test count unchanged at 250 — no tests were removed or added.
 - `packages/server/src/__tests__/checkout-router.test.ts`
 - `packages/server/src/__tests__/payment-pipeline.test.ts`
 - `packages/server/src/__tests__/tx-builder.test.ts`
-- `EMMY_CHANGELOG.md` (this file — appended)
+- `CHANGELOG.md` (this file — appended)
 
 ---
 
@@ -714,7 +714,7 @@ to `contracts/**` and runs independently of the JS/TS `ci.yml`.
 
 ### Files modified
 
-- `EMMY_CHANGELOG.md` (this file — appended)
+- `CHANGELOG.md` (this file — appended)
 
 ---
 
@@ -858,7 +858,7 @@ Suites:
 - `SECURITY.md`
 - `packages/server/src/index.ts`
 - `CHANGELOG.md`
-- `EMMY_CHANGELOG.md` (this file — appended)
+- `CHANGELOG.md` (this file — appended)
 
 ---
 
@@ -959,7 +959,7 @@ The discriminated union narrowing worked cleanly without any cast. The key was s
 `MatchResult` into 3 explicit variants rather than using `status: PaymentStatus` (a wide
 union) in the non-match branch. With `status: PaymentStatus`, TypeScript cannot narrow
 to a specific subtype on `status === 'overpaid'` because the whole second variant already
-covers all `PaymentStatus` values — the discriminant is not unique. With 3 explicit
+covers all `PaymentStatus` values — the discriminant is not unique. Wi⁸th 3 explicit
 variants, each `status` value belongs to exactly one variant, so narrowing is clean.
 
 ### Optional follow-up flagged
@@ -982,7 +982,7 @@ in a future pass. Not done here — kept strictly to the overpayment scope as in
 - `packages/core/src/__tests__/memo-matcher.test.ts`
 - `packages/server/src/payment-processor.ts`
 - `CHANGELOG.md`
-- `EMMY_CHANGELOG.md` (this file — appended)
+- `CHANGELOG.md` (this file — appended)
 
 ---
 
@@ -1075,7 +1075,7 @@ the escrow contract (PR 3):
 - CI Rust job path hygiene: do not add `working-directory` unless the crate is actually
   in a subdirectory; verify paths match reality before considering CI done.
 
-**`CHANGELOG.md`**, **`EMMY_CHANGELOG.md`**
+**`CHANGELOG.md`**
 
 Updated (this file — appended).
 
@@ -1112,8 +1112,7 @@ Breakdown:
 - `packages/server/src/__tests__/payment-pipeline.test.ts`
 - `ARCHITECTURE.md`
 - `CONTRIBUTING.md`
-- `CHANGELOG.md`
-- `EMMY_CHANGELOG.md` (this file — appended)
+- `CHANGELOG.md` (this file — appended)
 
 ---
 
@@ -1186,8 +1185,7 @@ covered only partially.
 
 - `packages/core/src/__tests__/horizon-listener-integration.test.ts` (new)
 - `packages/server/src/__tests__/payment-pipeline.test.ts` (new)
-- `EMMY_CHANGELOG.md` (this file — appended)
-- `CHANGELOG.md` (updated)
+- `CHANGELOG.md` (this file appended)
 
 ---
 
@@ -1236,7 +1234,6 @@ significant coverage hole in the codebase.
 - `packages/server/src/__tests__/checkout-router.test.ts` (new)
 - `packages/server/src/__tests__/session-manager.test.ts` (new)
 - `packages/server/src/__tests__/tx-builder.test.ts` (new)
-- `EMMY_CHANGELOG.md` (new — this file)
-- `CHANGELOG.md` (new)
+- `CHANGELOG.md` (new — this file
 
 ---
