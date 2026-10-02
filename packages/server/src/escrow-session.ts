@@ -51,7 +51,6 @@ import {
   scValToNative,
   Networks,
   BASE_FEE,
-  xdr,
   Account,
   Transaction,
 } from 'stellar-sdk';

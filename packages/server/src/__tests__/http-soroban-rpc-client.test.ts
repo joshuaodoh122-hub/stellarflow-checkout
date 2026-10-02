@@ -42,7 +42,6 @@
 import {
   HttpSorobanRpcClient,
   EscrowRpcError,
-  EscrowClientError,
   ESCROW_ERROR_CODES,
 } from '../escrow-session';
 import {
