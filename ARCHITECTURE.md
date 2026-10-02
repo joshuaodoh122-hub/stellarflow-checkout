@@ -467,9 +467,15 @@ Customer Browser / Wallet                 StellarFlow Server              Soroba
         │                                        │──────────────────────────────▶│
         │◀── { unsignedReleaseXdr } ─────────────│◀── unsignedXdr ───────────────│
         │                                        │                               │
-        │ 6. Merchant signs + submits XDR        │                               │
-        │    (via wallet or directly)            │ submitSignedTx ───────────────▶
-        │                                        │                               │ funds → merchant
+        │ 6. Merchant wallet signs XDR           │                               │
+        │    (no key sent to server)             │                               │
+        │                                        │                               │
+        │ 7. POST /api/escrow/:id/release/submit │                               │
+        │   { signedReleaseXdr }                 │                               │
+        │───────────────────────────────────────▶│ validate XDR                  │
+        │                                        │ submitSignedTx ───────────────▶
+        │                                        │ getEscrow() verify ───────────▶
+        │◀── { txHash, status: 'fulfilled' } ────│                               │ funds → merchant
 ```
 
 ### Non-custodial split
@@ -486,24 +492,37 @@ The write path is deliberately split in two to preserve the non-custodial invari
 
 ### XDR validation (submit endpoint)
 
-Before forwarding a signed deposit XDR to the chain, the server verifies:
+Before forwarding a signed deposit XDR to the chain, the server decodes every argument:
+
 1. XDR parses as a `Transaction` (not `FeeBump`)
 2. Exactly one `invokeHostFunction` operation
-3. Invoked contract ID == `session.contractId` (ESCROW_CONTRACT_ID)
-4. Invoked method == `"deposit"`
-5. Transaction source == `session.payerAddress`
+3. Host function type is `invokeContract` (not `uploadContractWasm` / `createContract`)
+4. Operation has no per-op source account, OR it equals `session.payerAddress`
+5. Transaction source account equals `session.payerAddress`
+6. Invoked contract ID equals `session.contractId`
+7. Method name equals `"deposit"`
+8. `arg[0]` payer equals `session.payerAddress` (exact)
+9. `arg[1]` merchant equals `session.merchantAddress` (exact)
+10. `arg[2]` amount equals `BigInt(session.amount)` (exact bigint)
+11. `arg[3]` token equals `session.tokenContractId` (exact)
+12. `arg[4]` order\_id equals `session.orderId` bytes (exact 32-byte comparison)
+13. `arg[5]` timeout\_ledgers equals `session.requestedTimeoutLedgers` (exact u32)
 
-This prevents an attacker from substituting a signed XDR for a different contract, method, or beneficiary.
+After confirmation, `getEscrow()` re-reads the on-chain record and verifies payer/merchant/amount/token before setting `deposited`. Mismatch → terminal `mismatch` status.
+
+The same structural checks (1–7) apply to release/submit and refund/submit.
 
 ### Session status lifecycle
 
 ```
-pending ──(submit succeeds)──▶ deposited ──(release)──▶ fulfilled
-   │                              │
-   └──(submit fails)──▶ failed    └──(refund)──▶ refunded
+pending ──(submit + on-chain verified)──▶ deposited ──(release/submit)──▶ fulfilled
+   │                                          │
+   └──(POLL_TIMEOUT: stays pending)           └──(refund/submit)──▶ refunded
+   │
+   └──(on-chain record mismatch)──▶ mismatch  (terminal)
 ```
 
-The session status is the server's view. The on-chain status (from `get_escrow`) is the canonical source. `GET /api/escrow/:id` reconciles them — if they disagree, the on-chain status wins and the session is updated.
+The session status is the server's view. The on-chain status (from `get_escrow`) is canonical. `GET /api/escrow/:id` reconciles them — only if on-chain payer/merchant/amount/token match the session does the server adopt the on-chain status.
 
 ### 503 guard
 
@@ -553,9 +572,10 @@ Customer Browser / Wallet           StellarFlow Server          Soroban RPC / Ch
         │                                   │                           │
         │ 3. POST /api/escrow/:id/submit    │                           │
         │   { signedDepositXdr }            │                           │
-        │──────────────────────────────────▶│ validate XDR              │
+        │──────────────────────────────────▶│ validate XDR (13 checks)  │
         │                                   │ submitSignedTx ───────────▶
         │                                   │ poll getTransaction ──────▶
+        │                                   │ getEscrow() verify ───────▶
         │◀── { txHash, status:deposited } ──│                           │
         │                                   │                           │
         │ 4. GET /api/escrow/:id            │                           │
@@ -569,8 +589,15 @@ Customer Browser / Wallet           StellarFlow Server          Soroban RPC / Ch
         │                                   │──────────────────────────▶│
         │◀── { unsignedReleaseXdr } ────────│◀── unsignedXdr ───────────│
         │                                   │                           │
-        │ 6. Merchant signs + submits       │                           │
-        │    (wallet or direct RPC call)    │                   funds → merchant
+        │ 6. Merchant wallet signs XDR      │                           │
+        │    (no key sent to server)        │                           │
+        │                                   │                           │
+        │ 7. POST /api/escrow/:id/release/submit                        │
+        │   { signedReleaseXdr }            │                           │
+        │──────────────────────────────────▶│ validate XDR              │
+        │                                   │ submitSignedTx ───────────▶
+        │                                   │ getEscrow() verify ───────▶
+        │◀── { txHash, status:fulfilled } ──│                   funds → merchant
 ```
 
 ### Non-custodial split
@@ -587,24 +614,37 @@ The write path is deliberately split to preserve the non-custodial invariant:
 
 ### XDR validation (submit endpoint)
 
-Before forwarding a signed deposit XDR to the chain, the server verifies:
+Before forwarding a signed deposit XDR to the chain, the server decodes and verifies every argument:
+
 1. XDR parses as a `Transaction` (not `FeeBump`)
 2. Exactly one `invokeHostFunction` operation
-3. Invoked contract ID == `session.contractId` (ESCROW_CONTRACT_ID)
-4. Invoked method == `"deposit"`
-5. Transaction source == `session.payerAddress`
+3. Host function type is `invokeContract` (not `uploadContractWasm` or `createContract`)
+4. Operation has no per-op source account, OR it equals `session.payerAddress`
+5. Transaction source account equals `session.payerAddress`
+6. Invoked contract ID equals `session.contractId` (ESCROW_CONTRACT_ID)
+7. Method name equals `"deposit"`
+8. `arg[0]` payer equals `session.payerAddress` (exact)
+9. `arg[1]` merchant equals `session.merchantAddress` (exact)
+10. `arg[2]` amount equals `BigInt(session.amount)` (exact bigint)
+11. `arg[3]` token equals `session.tokenContractId` (exact)
+12. `arg[4]` order\_id equals `session.orderId` bytes (exact 32-byte comparison)
+13. `arg[5]` timeout\_ledgers equals `session.requestedTimeoutLedgers` (exact u32)
 
-This prevents XDR substitution: an attacker cannot swap in a signed XDR targeting a different contract, method, or beneficiary.
+After `submitSignedTx` confirms, `getEscrow()` re-reads the on-chain record and verifies payer/merchant/amount/token match the session before setting status to `deposited`. Mismatch → terminal `mismatch` status.
+
+The same structural checks (1–7) apply to release/submit and refund/submit, with method == `"release"` / `"refund"`, tx source verified, and the order\_id argument checked exactly.
 
 ### Session status lifecycle
 
 ```
-pending ──(submit succeeds)──▶ deposited ──(release tx)──▶ fulfilled
-   │                               │
-   └──(submit fails)──▶ failed     └──(refund tx)──▶ refunded
+pending ──(submit succeeds + on-chain verified)──▶ deposited ──(release tx)──▶ fulfilled
+   │                                                   │
+   └──(submit fails)──▶ (stays pending, retryable)     └──(refund tx)──▶ refunded
+   │
+   └──(on-chain record mismatch after confirm)──▶ mismatch  (terminal — investigate)
 ```
 
-The session status is the server's view. The on-chain status (from `get_escrow`) is canonical. `GET /api/escrow/:id` reconciles them — if they disagree, on-chain wins.
+The session status is the server's view. The on-chain status (from `get_escrow`) is canonical. `GET /api/escrow/:id` reconciles them — if the on-chain record matches the session's payer/merchant/amount/token, the on-chain status is adopted. If they don't match, a `reconcileError` is returned and the session is NOT promoted.
 
 ### Contract error mapping
 

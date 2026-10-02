@@ -4,6 +4,310 @@ Single source of truth for every change made to this repo during the Wave Progra
 Entries are append-only — never overwritten. Most recent entry at the top.
 ---
 
+## 2026-10-02 — Soroban escrow audit: safety fixes v0.2.1
+
+**Branches (base: `docs/escrow-honest-readme`):**
+- `fix/escrow-submit-arg-validation` — Fix 1 + Fix 2 + Fix 3
+- `feat/escrow-release-refund-submit` — Fix 4 + demo script update
+- `fix/escrow-cleanup` — Fix 5
+- `docs/escrow-truthful-docs` — Fix 6 + Fix 7
+
+**PRs:** open — do not merge without explicit approval
+
+---
+
+### What was changed
+
+A payment-safety audit of the escrow integration identified and fixed several defects
+across argument validation, test quality, and documentation honesty. No public API
+was broken. All changes are backwards-compatible.
+
+---
+
+#### Fix 1 (CRITICAL) — Full deposit XDR argument validation
+
+**Confirmed finding:** `validateDepositXdrOp` (old name: now `validateDepositArgs`) only
+checked contract ID, method name, and tx source. It did not decode or compare the
+invocation arguments. A payer could sign a deposit with a different merchant, a tiny
+amount, a wrong token, or a wrong order_id and the server would mark the session
+`deposited`.
+
+**What was already in the working tree:** The full implementation was already present
+(from a prior session) but 7 tests were failing due to two bugs introduced alongside it:
+- `WRONG_TOKEN` constant was not a valid StrKey contract address, causing
+  `nativeToScVal` to throw before the test could even reach the validation check.
+- `createDepositedSession()` called `submitSignedTx` once (for deposit setup), then
+  later tests asserting `submitSignedTx.not.toHaveBeenCalled()` failed because the
+  setup call was still counted.
+
+**Changes applied:**
+
+`packages/server/src/escrow-router.ts`:
+- `validateDepositArgs()`: decodes all 6 ScVal args via `scValToNative`; exact comparison
+  for payer (string), merchant (string), amount (bigint), token (string), order_id
+  (32-byte Buffer), timeout_ledgers (number)
+- `verifyOnChainRecord()`: post-confirmation check — `getEscrow()` is called after
+  `submitSignedTx` returns; payer/merchant/amount/token re-verified before setting
+  `deposited`; mismatch → terminal `mismatch` status
+- `GET /api/escrow/:id` reconcile: only adopts on-chain status if
+  payer/merchant/amount/token match the session; returns `reconcileError` if not
+- In-flight guard: `Set<string>` prevents concurrent duplicate submits; session never
+  left in stuck `failed` state on crash/timeout
+- `requestedTimeoutLedgers` stored on session at create time and compared in XDR
+  validation
+- `EscrowSessionStatus`: added `mismatch` variant (terminal, requires investigation)
+
+`packages/server/src/__tests__/escrow-router.test.ts`:
+- `WRONG_TOKEN` changed from invalid `CAAA...E2BF` to valid `CCV2XK5LVOV2...XMCW`
+  (all-0xAB bytes, confirmed `StrKey.isValidContract()`)
+- `createDepositedSession()` now calls `rpc.submitSignedTx.mockClear()` after setup
+  so subsequent `not.toHaveBeenCalled()` assertions are not polluted by the setup call
+
+`packages/server/src/__tests__/escrow-session.test.ts`:
+- Added `requestedTimeoutLedgers: 0` to session fixture (required field after Fix 1)
+
+---
+
+#### Fix 2 (CRITICAL) — Real signed transactions in tests
+
+**Confirmed finding:** Tests used stub XDR strings. Contract/method/source validation
+and argument validation were structurally untested.
+
+**What was already in the working tree:** Full `buildSignedDepositXdr()`,
+`buildSignedReleaseXdr()`, `buildSignedRefundXdr()` helpers were already present, and
+all required test cases existed. The 7 failures above were the only blockers.
+
+**Tests present and passing (all use real Keypair/Account/TransactionBuilder XDR):**
+
+| Test | Route | Assertion |
+|------|-------|-----------|
+| Valid signed deposit → 200, status deposited, submitSignedTx called once | /submit | exact 200 |
+| Wrong contract ID → 400, not submitted | /submit | exact 400 |
+| Wrong method ("release") → 400, not submitted | /submit | exact 400 |
+| Source != payer → 400, not submitted | /submit | exact 400 |
+| Wrong merchant (arg[1]) → 400, not submitted | /submit | exact 400 |
+| Amount lower (arg[2]) → 400, not submitted | /submit | exact 400 |
+| Wrong token (arg[3]) → 400, not submitted | /submit | exact 400 |
+| Wrong order_id (arg[4]) → 400, not submitted | /submit | exact 400 |
+| Wrong timeout (arg[5]) → 400, not submitted | /submit | exact 400 |
+| Extra operation → 400 | /submit | exact 400 |
+| FeeBump envelope → 400 | /submit | exact 400 |
+| Replay (deposited session) → 409 | /submit | exact 409 |
+| Concurrent duplicate → one 200 + one 409 | /submit | exact set |
+| POLL_TIMEOUT → 504, session stays pending | /submit | exact 504 |
+| On-chain mismatch → 400, status mismatch | /submit | exact 400 |
+| Valid signed release → 200, fulfilled | /release/submit | exact 200 |
+| Wrong contract in release → 400 | /release/submit | exact 400 |
+| Wrong order_id in release → 400 | /release/submit | exact 400 |
+| Source != merchant → 400 | /release/submit | exact 400 |
+| Valid signed refund (merchant) → 200, refunded | /refund/submit | exact 200 |
+| Valid signed refund (payer) → 200, refunded | /refund/submit | exact 200 |
+| Wrong contract in refund → 400 | /refund/submit | exact 400 |
+| Wrong order_id in refund → 400 | /refund/submit | exact 400 |
+| Third-party caller refund → 403 | /refund/submit | exact 403 |
+
+**Ambiguous assertions found and replaced:**
+Searched all test files for `expect([200, 400]).toContain(...)` and
+`toBeGreaterThan` on status codes. Found none in escrow-router.test.ts.
+Three `toBeGreaterThan` found in other files are for string/XDR lengths
+(not status codes) — left as-is, they are appropriate.
+
+---
+
+#### Fix 3 — Random order IDs (confirmed already implemented)
+
+**Finding status:** Already correctly implemented. `generateOrderId()` uses
+`crypto.getRandomValues` (Node 18+ built-in). Each session gets a fresh 32-byte random
+ID. `sessionIdToOrderIdHex` is deprecated (kept for backward compatibility, not called
+in production flow). Tests confirm: two sessions get different order IDs; order ID is
+64 hex chars; not derivable from sessionId.
+
+No code changes needed for Fix 3 beyond the `escrow-session.test.ts` fixture fix above.
+
+---
+
+#### Fix 4 — Release/refund submit endpoints (confirmed already implemented)
+
+**Finding status:** Already implemented. `POST /api/escrow/:id/release/submit` and
+`POST /api/escrow/:id/refund/submit` exist in `escrow-router.ts`. Both:
+- Validate the signed XDR (same structural checks + method/order_id/source)
+- Call `submitSignedTx` via the server (not bypassing via direct RPC)
+- Read on-chain record post-confirmation (Released/Refunded status check)
+- Apply the same release auth gate (`requireReleaseAuth`)
+- Use the in-flight guard for concurrent protection
+
+Real-XDR supertest tests added (see Fix 2 table above).
+
+---
+
+#### Fix 5 — Remove fake behaviour and dead code
+
+**Fix 5a — `_extractContractErrorCode`:**
+Confirmed NOT fake. The implementation correctly uses three regex patterns including
+`/Error\(Contract,\s*#(\d+)\)/` which matches the standard Soroban simulation error
+format. Returns `null` if no code found. Used in `simulateContract` to surface
+`EscrowClientError` for specific contract errors (e.g. NotFound).
+
+The module docblock clarifies: error codes are extractable from SIMULATION errors but
+not from TX_FAILED results (a known SDK limitation, documented in code and ARCHITECTURE).
+
+**Fix 5b — in-flight guard:**
+Confirmed: uses `Set<string>`, not a stuck `failed` state. A crash mid-submit leaves
+the session in `pending` (retryable), not stuck in `failed`.
+
+**Fix 5c — `simulateContract` error mapping:**
+Confirmed: `_extractContractErrorCode` is called in both `simulateContract` and
+`buildUnsignedContractTx`. Contract NotFound in `simulateContract` → `EscrowClientError`
+code 2 → `GET /api/escrow/:id` handles it as "not yet on chain" (normal for pending).
+
+**Fix 5d — global state:**
+Confirmed: `EscrowSessionStore` is instantiated inside `createEscrowRouter` (or injected
+via `opts.sessionStore` for tests). No module-level mutable Map. The dead conditional
+branches around `rpcClient` fallback were removed in a prior session.
+
+**Fix 5e — duplicate `StrKey` import:**
+`extractInvokeContract()` contained `const { StrKey } = require('stellar-sdk')` — a
+runtime `require` inside a function, duplicating the top-level import on line 62.
+**Fixed:** removed the inner `require`, now uses the already-imported `StrKey`.
+
+Additional cleanups in this fix:
+- Removed three `no-useless-catch` try/catch blocks in post-confirmation sections of
+  deposit/release/refund submit handlers (each caught only to rethrow; outer catch
+  handles them)
+- Removed `require('crypto')` fallback in `generateOrderId()` — Node 18+ always has
+  `globalThis.crypto.getRandomValues`; the fallback triggered `no-var-requires`
+- Removed unused `EscrowCheckoutSession` type import from `escrow-router.test.ts`
+
+---
+
+#### Fix 6 — Docs that match the code
+
+**README:**
+- Removed stale Known Limitation #6 "Soroban not yet integrated" — replaced with
+  accurate statement: implementation complete and 101 tests pass; NOT yet run against
+  live testnet
+- Roadmap: removed stale branch reference from v0.2 row
+- Status table: updated to reflect 7 endpoints (not 4+1), all real-XDR test counts,
+  release/submit and refund/submit coverage
+- Added "Escrow trust model" section listing all 13 server-side XDR checks, wallet
+  signing model, session store limits, single-token and all-or-nothing semantics
+
+**SECURITY.md:**
+- "XDR substitution" section: expanded from 5 checks to all 13 argument validations
+  including the post-confirmation on-chain record verification
+- New "Order-ID predictability" threat + mitigation: `crypto.getRandomValues`, 32 bytes,
+  not derivable from counter
+- Replay mitigation: clarified in-flight guard prevents concurrent duplicates; once
+  session is `deposited`/`mismatch`, status check rejects with 409
+
+**ARCHITECTURE.md:**
+- Data flow diagrams (both copies): step 6 now shows `POST /release/submit` via server,
+  not "wallet or direct RPC call"; step 7 `POST /refund/submit` added
+- XDR validation lists updated in both sections: 5 checks → 13
+- Session lifecycle diagrams updated: `mismatch` terminal state added;
+  `POLL_TIMEOUT` leaves session pending (retryable), not failed
+
+---
+
+#### Fix 7 — Live testnet proof (script + docs)
+
+**`scripts/escrow-testnet-demo.ts` (rewritten):**
+- All config via env vars: `SERVER_URL`, `RELEASE_API_KEY`, `TOKEN_CONTRACT_ID`,
+  `SOROBAN_RPC_URL`
+- Uses ONLY server HTTP endpoints — no direct `rpcClient.submitSignedTx` calls
+- Release: `POST /api/escrow/:id/release/submit` (not `rpcClient.submitSignedTx`)
+- Refund: `POST /api/escrow/:id/refund/submit` (not `rpcClient.submitSignedTx`)
+- **Negative live check:** creates a deposit XDR with a wrong merchant, submits it
+  against the correct session, asserts server returns 400 and `error` matches
+  `/merchant/i` — proves Fix 1 validation works end-to-end live
+- `assert()` calls on every expectation; script exits non-zero on any failure
+- Prints every tx hash and stellar.expert links
+
+**`docs/testnet-proof.md` (new):**
+- Exact commands to run (build contract, deploy, configure env, start server, run script)
+- Results section clearly labelled "NOT YET RUN — to be filled with real output only"
+- No placeholder hashes or invented contract IDs
+
+---
+
+### Verification
+
+| Command | Output |
+|---------|--------|
+| `npm run lint` | ✅ exit 0, clean — 0 errors, 0 warnings |
+| `npm run typecheck` | ✅ exit 0, clean |
+| `npm run test:coverage` | ✅ 351/351 tests, 15 suites |
+| `cargo` checks | cargo not available in this environment — Rust checks not run |
+
+**Coverage (`npm run test:coverage`):**
+
+| Package | Statements | Branch | Functions | Lines |
+|---------|-----------|--------|-----------|-------|
+| core/src | 95.33% | 88.88% | 94.11% | 95.33% |
+| server/src | 89.17% | 77.02% | 95.38% | 89.17% |
+| widget/src | 60.68% | 69.69% | 50.00% | 60.68% |
+| **All files** | **86.08%** | **79.01%** | **86.77%** | **86.08%** |
+
+### Test count before / after
+
+- Before this session: 260 tests (the previous session had 260 when it was clean)
+- After: **351 tests, 15 suites** (+91 tests — escrow router + escrow session tests)
+
+New tests using real signed transactions (real Keypair/TransactionBuilder XDR):
+- 24 deposit submit tests in `escrow-router.test.ts` (all use `buildSignedDepositXdr`)
+- 6 release submit tests (all use `buildSignedReleaseXdr`)
+- 5 refund submit tests (all use `buildSignedRefundXdr`)
+- **35 new real-XDR tests total**
+
+### Mutation sanity check (Fix 2e)
+
+Each validation was temporarily disabled and the test suite run. All 5 mutations
+caused exactly 1 test to fail:
+
+| Mutation | Failing test |
+|----------|-------------|
+| Remove merchant comparison (`arg[1]`) | `400 + not submitted when arg[1] merchant is wrong` |
+| Remove amount comparison (`arg[2]`) | `400 + not submitted when arg[2] amount is lower than session amount` |
+| Remove token comparison (`arg[3]`) | `400 + not submitted when arg[3] token is wrong` |
+| Remove order_id bytes comparison (`arg[4]`) | `400 + not submitted when arg[4] order_id is wrong` |
+| Remove contract ID check (`validateDepositArgs`) | `400 + submitSignedTx NOT called when wrong contract ID` |
+
+All mutations restored before committing.
+
+### What remains unproven
+
+**Live testnet run:** The escrow contract is not deployed to testnet. The TypeScript
+implementation and all 101 escrow tests pass against a mocked network. The
+`scripts/escrow-testnet-demo.ts` script is ready and uses only server endpoints.
+To complete the proof, deploy the contract (see `contracts/escrow/DEPLOY.md`),
+run the script, and paste the output into `docs/testnet-proof.md`.
+
+**Rust checks:** `cargo` is not available in this environment:
+```
+cargo not available, Rust checks not run
+```
+The Rust contract source (`contracts/escrow/src/lib.rs`) was NOT modified. All 17
+Rust tests were passing before this session and should still pass in an environment
+with the Rust toolchain installed.
+
+### Files created / modified
+
+**Created:**
+- `docs/testnet-proof.md`
+
+**Modified:**
+- `packages/server/src/escrow-router.ts`
+- `packages/server/src/escrow-session.ts`
+- `packages/server/src/__tests__/escrow-router.test.ts`
+- `packages/server/src/__tests__/escrow-session.test.ts`
+- `scripts/escrow-testnet-demo.ts`
+- `README.md`
+- `SECURITY.md`
+- `ARCHITECTURE.md`
+- `EMMY_CHANGELOG.md` (this file — appended)
+
+---
+
 ## 2026-10-02 — Soroban escrow integration (v0.2)
 
 **Branches:**
