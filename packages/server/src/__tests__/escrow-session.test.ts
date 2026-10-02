@@ -14,9 +14,10 @@
  *   - sessionIdToOrderIdHex produces consistent 64-char hex output
  *   - escrowRecordToSessionStatus maps all three EscrowStatus values
  *   - EscrowClientError carries correct code, codeName, and message
+ *   - buildDepositXdr / buildReleaseXdr / buildRefundXdr delegate correctly
  *
  * What is NOT tested here:
- *   - Real Soroban RPC wire format (that's an integration test against a live node)
+ *   - Real Soroban RPC wire format (covered by http-soroban-rpc-client.test.ts)
  *   - Transaction signing (non-custodial invariant — signing is in the wallet)
  *   - The Rust contract logic (covered by the Rust test suite in contracts/escrow)
  */
@@ -40,6 +41,8 @@ const MERCHANT = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
 const TOKEN = 'CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA';
 const ORDER_ID_HEX = sessionIdToOrderIdHex(1n);
 const DEPOSIT_AMOUNT = 500_000_000n; // 50 USDC in stroops
+const UNSIGNED_XDR = 'AAAAAQAAAAB0000000000000000000000000000000000000000000000000001';
+const NETWORK_PASSPHRASE = 'Test SDF Network ; September 2015';
 
 // ─── Mock factory ─────────────────────────────────────────────────────────────
 
@@ -47,11 +50,19 @@ const DEPOSIT_AMOUNT = 500_000_000n; // 50 USDC in stroops
  * Create a mock SorobanRpcClient.
  * All methods return jest.fn() so tests can configure return values and
  * assert on calls.
+ *
+ * The new interface includes:
+ *   - invokeContract (signer callback required — scripts/tests only)
+ *   - simulateContract (read-only path)
+ *   - buildUnsignedContractTx (returns unsigned XDR, no key needed)
+ *   - submitSignedTx (accepts signed XDR, polls, returns hash)
  */
 function createMockRpc(): jest.Mocked<SorobanRpcClient> {
   return {
     invokeContract: jest.fn(),
     simulateContract: jest.fn(),
+    buildUnsignedContractTx: jest.fn(),
+    submitSignedTx: jest.fn(),
   };
 }
 
@@ -71,6 +82,9 @@ function makeEscrowRecord(overrides: Partial<EscrowRecord> = {}): EscrowRecord {
   };
 }
 
+/** A no-op signer for tests — never called when rpc.invokeContract is mocked. */
+const noopSigner = async (_xdr: string): Promise<string> => _xdr;
+
 // ─── EscrowClient — deposit ───────────────────────────────────────────────────
 
 describe('EscrowClient.deposit()', () => {
@@ -85,7 +99,7 @@ describe('EscrowClient.deposit()', () => {
   it('invokes the contract with the correct method and args', async () => {
     rpc.invokeContract.mockResolvedValue({ txHash: 'txhash-abc', status: 'success' });
 
-    const hash = await client.deposit(PAYER, MERCHANT, DEPOSIT_AMOUNT, TOKEN, ORDER_ID_HEX, 0);
+    const hash = await client.deposit(PAYER, MERCHANT, DEPOSIT_AMOUNT, TOKEN, ORDER_ID_HEX, 0, noopSigner);
 
     expect(hash).toBe('txhash-abc');
     expect(rpc.invokeContract).toHaveBeenCalledTimes(1);
@@ -94,7 +108,7 @@ describe('EscrowClient.deposit()', () => {
         contractId: CONTRACT_ID,
         method: 'deposit',
         signerAddress: PAYER,
-        args: expect.arrayContaining([PAYER, MERCHANT, DEPOSIT_AMOUNT.toString(), TOKEN, ORDER_ID_HEX, 0]),
+        args: expect.arrayContaining([PAYER, MERCHANT, DEPOSIT_AMOUNT, TOKEN, ORDER_ID_HEX, 0]),
       }),
     );
   });
@@ -102,7 +116,7 @@ describe('EscrowClient.deposit()', () => {
   it('uses the default timeout (0) when not specified', async () => {
     rpc.invokeContract.mockResolvedValue({ txHash: 'txhash-def', status: 'success' });
 
-    await client.deposit(PAYER, MERCHANT, DEPOSIT_AMOUNT, TOKEN, ORDER_ID_HEX);
+    await client.deposit(PAYER, MERCHANT, DEPOSIT_AMOUNT, TOKEN, ORDER_ID_HEX, undefined, noopSigner);
 
     const call = rpc.invokeContract.mock.calls[0]![0];
     expect(call.args).toContain(0); // default timeout_ledgers
@@ -116,11 +130,17 @@ describe('EscrowClient.deposit()', () => {
     });
 
     await expect(
-      client.deposit(PAYER, MERCHANT, DEPOSIT_AMOUNT, TOKEN, ORDER_ID_HEX),
+      client.deposit(PAYER, MERCHANT, DEPOSIT_AMOUNT, TOKEN, ORDER_ID_HEX, 0, noopSigner),
     ).rejects.toThrow(EscrowClientError);
 
+    rpc.invokeContract.mockResolvedValue({
+      txHash: '',
+      status: 'failed',
+      errorCode: ESCROW_ERROR_CODES.AlreadyExists,
+    });
+
     await expect(
-      client.deposit(PAYER, MERCHANT, DEPOSIT_AMOUNT, TOKEN, ORDER_ID_HEX),
+      client.deposit(PAYER, MERCHANT, DEPOSIT_AMOUNT, TOKEN, ORDER_ID_HEX, 0, noopSigner),
     ).rejects.toMatchObject({
       operation: 'deposit',
       code: ESCROW_ERROR_CODES.AlreadyExists,
@@ -132,7 +152,7 @@ describe('EscrowClient.deposit()', () => {
     const expectedHash = 'abc123def456';
     rpc.invokeContract.mockResolvedValue({ txHash: expectedHash, status: 'success' });
 
-    const result = await client.deposit(PAYER, MERCHANT, 100n, TOKEN, ORDER_ID_HEX);
+    const result = await client.deposit(PAYER, MERCHANT, 100n, TOKEN, ORDER_ID_HEX, 0, noopSigner);
     expect(result).toBe(expectedHash);
   });
 });
@@ -151,7 +171,7 @@ describe('EscrowClient.release()', () => {
   it('invokes release with the order ID and merchant as signer', async () => {
     rpc.invokeContract.mockResolvedValue({ txHash: 'release-hash', status: 'success' });
 
-    const hash = await client.release(ORDER_ID_HEX, MERCHANT);
+    const hash = await client.release(ORDER_ID_HEX, MERCHANT, noopSigner);
 
     expect(hash).toBe('release-hash');
     expect(rpc.invokeContract).toHaveBeenCalledWith(
@@ -170,7 +190,7 @@ describe('EscrowClient.release()', () => {
       errorCode: ESCROW_ERROR_CODES.AlreadyReleased,
     });
 
-    await expect(client.release(ORDER_ID_HEX, MERCHANT)).rejects.toMatchObject({
+    await expect(client.release(ORDER_ID_HEX, MERCHANT, noopSigner)).rejects.toMatchObject({
       name: 'EscrowClientError',
       operation: 'release',
       code: ESCROW_ERROR_CODES.AlreadyReleased,
@@ -185,7 +205,7 @@ describe('EscrowClient.release()', () => {
       errorCode: ESCROW_ERROR_CODES.AlreadyRefunded,
     });
 
-    await expect(client.release(ORDER_ID_HEX, MERCHANT)).rejects.toMatchObject({
+    await expect(client.release(ORDER_ID_HEX, MERCHANT, noopSigner)).rejects.toMatchObject({
       code: ESCROW_ERROR_CODES.AlreadyRefunded,
       codeName: 'AlreadyRefunded',
     });
@@ -198,8 +218,9 @@ describe('EscrowClient.release()', () => {
       errorCode: ESCROW_ERROR_CODES.NotFound,
     });
 
-    await expect(client.release('0000000000000000000000000000000000000000000000000000000000000099', MERCHANT))
-      .rejects.toMatchObject({ code: ESCROW_ERROR_CODES.NotFound });
+    await expect(
+      client.release('0000000000000000000000000000000000000000000000000000000000000099', MERCHANT, noopSigner),
+    ).rejects.toMatchObject({ code: ESCROW_ERROR_CODES.NotFound });
   });
 });
 
@@ -217,7 +238,7 @@ describe('EscrowClient.refund()', () => {
   it('merchant voluntary refund — invokes refund with merchant as caller and signer', async () => {
     rpc.invokeContract.mockResolvedValue({ txHash: 'refund-hash', status: 'success' });
 
-    const hash = await client.refund(ORDER_ID_HEX, MERCHANT);
+    const hash = await client.refund(ORDER_ID_HEX, MERCHANT, noopSigner);
 
     expect(hash).toBe('refund-hash');
     expect(rpc.invokeContract).toHaveBeenCalledWith(
@@ -232,7 +253,7 @@ describe('EscrowClient.refund()', () => {
   it('payer refund after timeout — invokes refund with payer as caller and signer', async () => {
     rpc.invokeContract.mockResolvedValue({ txHash: 'payer-refund-hash', status: 'success' });
 
-    const hash = await client.refund(ORDER_ID_HEX, PAYER);
+    const hash = await client.refund(ORDER_ID_HEX, PAYER, noopSigner);
 
     expect(rpc.invokeContract).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -250,7 +271,7 @@ describe('EscrowClient.refund()', () => {
       errorCode: ESCROW_ERROR_CODES.TimeoutNotElapsed,
     });
 
-    await expect(client.refund(ORDER_ID_HEX, PAYER)).rejects.toMatchObject({
+    await expect(client.refund(ORDER_ID_HEX, PAYER, noopSigner)).rejects.toMatchObject({
       code: ESCROW_ERROR_CODES.TimeoutNotElapsed,
       codeName: 'TimeoutNotElapsed',
     });
@@ -264,7 +285,7 @@ describe('EscrowClient.refund()', () => {
     });
 
     const randomAddress = 'GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX';
-    await expect(client.refund(ORDER_ID_HEX, randomAddress)).rejects.toMatchObject({
+    await expect(client.refund(ORDER_ID_HEX, randomAddress, noopSigner)).rejects.toMatchObject({
       code: ESCROW_ERROR_CODES.NotAuthorized,
       codeName: 'NotAuthorized',
     });
@@ -331,6 +352,70 @@ describe('EscrowClient.getEscrow()', () => {
   });
 });
 
+// ─── EscrowClient — buildDepositXdr / buildReleaseXdr / buildRefundXdr ────────
+
+describe('EscrowClient unsigned XDR builders (non-custodial write path)', () => {
+  let rpc: jest.Mocked<SorobanRpcClient>;
+  let client: EscrowClient;
+
+  beforeEach(() => {
+    rpc = createMockRpc();
+    client = new EscrowClient({ rpcClient: rpc, contractId: CONTRACT_ID, network: 'testnet' });
+    rpc.buildUnsignedContractTx.mockResolvedValue({
+      unsignedXdr: UNSIGNED_XDR,
+      networkPassphrase: NETWORK_PASSPHRASE,
+    });
+  });
+
+  it('buildDepositXdr calls buildUnsignedContractTx with deposit method and payer as caller', async () => {
+    const result = await client.buildDepositXdr(PAYER, MERCHANT, DEPOSIT_AMOUNT, TOKEN, ORDER_ID_HEX, 0);
+
+    expect(rpc.buildUnsignedContractTx).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contractId: CONTRACT_ID,
+        method: 'deposit',
+        callerAddress: PAYER,
+        args: expect.arrayContaining([PAYER, MERCHANT, DEPOSIT_AMOUNT, TOKEN, ORDER_ID_HEX, 0]),
+      }),
+    );
+    expect(result.unsignedXdr).toBe(UNSIGNED_XDR);
+    expect(result.networkPassphrase).toBe(NETWORK_PASSPHRASE);
+  });
+
+  it('buildReleaseXdr calls buildUnsignedContractTx with release method and merchant as caller', async () => {
+    const result = await client.buildReleaseXdr(ORDER_ID_HEX, MERCHANT);
+
+    expect(rpc.buildUnsignedContractTx).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contractId: CONTRACT_ID,
+        method: 'release',
+        callerAddress: MERCHANT,
+        args: [ORDER_ID_HEX],
+      }),
+    );
+    expect(result.unsignedXdr).toBe(UNSIGNED_XDR);
+  });
+
+  it('buildRefundXdr calls buildUnsignedContractTx with refund method and caller as both arg and caller', async () => {
+    const result = await client.buildRefundXdr(ORDER_ID_HEX, PAYER);
+
+    expect(rpc.buildUnsignedContractTx).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contractId: CONTRACT_ID,
+        method: 'refund',
+        callerAddress: PAYER,
+        args: [ORDER_ID_HEX, PAYER],
+      }),
+    );
+    expect(result.unsignedXdr).toBe(UNSIGNED_XDR);
+  });
+
+  it('buildDepositXdr does NOT call invokeContract (non-custodial)', async () => {
+    await client.buildDepositXdr(PAYER, MERCHANT, DEPOSIT_AMOUNT, TOKEN, ORDER_ID_HEX, 0);
+    expect(rpc.invokeContract).not.toHaveBeenCalled();
+  });
+});
+
 // ─── Full session lifecycle ───────────────────────────────────────────────────
 
 describe('EscrowCheckoutSession lifecycle — mock end-to-end', () => {
@@ -366,6 +451,8 @@ describe('EscrowCheckoutSession lifecycle — mock end-to-end', () => {
       BigInt(session.amount),
       session.tokenContractId,
       session.orderId,
+      0,
+      noopSigner,
     );
     expect(depositHash).toBe('deposit-hash');
 
@@ -379,7 +466,7 @@ describe('EscrowCheckoutSession lifecycle — mock end-to-end', () => {
 
     // Step 3: Merchant releases funds after fulfilment
     rpc.invokeContract.mockResolvedValueOnce({ txHash: 'release-hash', status: 'success' });
-    const releaseHash = await client.release(session.orderId, session.merchantAddress);
+    const releaseHash = await client.release(session.orderId, session.merchantAddress, noopSigner);
     expect(releaseHash).toBe('release-hash');
 
     // Step 4: Confirm release by reading on-chain status → session becomes 'fulfilled'
@@ -400,6 +487,8 @@ describe('EscrowCheckoutSession lifecycle — mock end-to-end', () => {
       BigInt(session.amount),
       session.tokenContractId,
       session.orderId,
+      0,
+      noopSigner,
     );
 
     // Step 2: Confirm deposit by querying on-chain status
@@ -412,7 +501,7 @@ describe('EscrowCheckoutSession lifecycle — mock end-to-end', () => {
 
     // Step 3: Merchant decides to refund (e.g. stock out, can't fulfil)
     rpc.invokeContract.mockResolvedValueOnce({ txHash: 'refund-hash', status: 'success' });
-    const refundHash = await client.refund(session.orderId, session.merchantAddress);
+    const refundHash = await client.refund(session.orderId, session.merchantAddress, noopSigner);
     expect(refundHash).toBe('refund-hash');
 
     // Step 4: Confirm refund by querying on-chain status
@@ -427,7 +516,7 @@ describe('EscrowCheckoutSession lifecycle — mock end-to-end', () => {
   it('double release is blocked by the contract', async () => {
     // First release succeeds
     rpc.invokeContract.mockResolvedValueOnce({ txHash: 'release-hash', status: 'success' });
-    await client.release(session.orderId, MERCHANT);
+    await client.release(session.orderId, MERCHANT, noopSigner);
 
     // Second release fails with AlreadyReleased
     rpc.invokeContract.mockResolvedValueOnce({
@@ -436,7 +525,7 @@ describe('EscrowCheckoutSession lifecycle — mock end-to-end', () => {
       errorCode: ESCROW_ERROR_CODES.AlreadyReleased,
     });
 
-    await expect(client.release(session.orderId, MERCHANT)).rejects.toMatchObject({
+    await expect(client.release(session.orderId, MERCHANT, noopSigner)).rejects.toMatchObject({
       code: ESCROW_ERROR_CODES.AlreadyReleased,
     });
   });
@@ -450,7 +539,7 @@ describe('EscrowCheckoutSession lifecycle — mock end-to-end', () => {
       result: makeEscrowRecord({ amount: expectedAmount, token: expectedToken }),
     });
 
-    await client.deposit(PAYER, MERCHANT, expectedAmount, expectedToken, ORDER_ID_HEX);
+    await client.deposit(PAYER, MERCHANT, expectedAmount, expectedToken, ORDER_ID_HEX, 0, noopSigner);
     const record = await client.getEscrow(ORDER_ID_HEX);
 
     expect(record.amount).toBe(expectedAmount);
