@@ -4,7 +4,143 @@ Single source of truth for every change made to this repo during the Wave Progra
 Entries are append-only — never overwritten. Most recent entry at the top.
 ---
 
-## 2026-10-01 — Quality fixes: auth, validation, coverage, escrow stub, widget, lint (v0.3)
+## 2026-10-02 — Soroban escrow integration (v0.2)
+
+**Branches:**
+- `feat/escrow-rpc-client` — Part 1: real HttpSorobanRpcClient + tests
+- `feat/escrow-checkout-routes` — Part 2: escrow HTTP endpoints + tests
+- `feat/escrow-testnet-proof` — Part 3: testnet demo script
+- `docs/escrow-honest-readme` — Part 5: docs update
+
+**PRs:** open — do not merge without explicit approval
+
+### What was changed
+
+Five-part escrow integration converting the existing stub into a working, tested checkout mode.
+
+---
+
+#### Part 1 — Real HttpSorobanRpcClient
+
+**Files:**
+- `packages/server/src/escrow-session.ts` (rewritten)
+- `packages/server/src/__tests__/escrow-session.test.ts` (updated)
+- `packages/server/src/__tests__/http-soroban-rpc-client.test.ts` (new)
+
+**Summary:**
+- `HttpSorobanRpcClient` now calls real Soroban RPC via `stellar-sdk@12.3.0`'s `SorobanRpc.Server`
+- `simulateContract`: builds tx, calls `rpc.simulateTransaction`, decodes ScVal result
+- `buildUnsignedContractTx`: load account → simulate → assemble footprint → return unsigned XDR
+- `submitSignedTx`: validate XDR → `rpc.sendTransaction` → poll `getTransaction` until SUCCESS/FAILED (30s timeout, 1.5s interval)
+- `invokeContract`: convenience wrapper combining build+sign+submit; signer callback injected; documented as scripts/tests-only
+- `EscrowRpcError` added with 6 distinct kinds: `SIMULATION_FAILED`, `SEND_FAILED`, `TX_FAILED`, `POLL_TIMEOUT`, `INVALID_XDR`, `NETWORK_ERROR`
+- `EscrowClient` gains `buildDepositXdr`, `buildReleaseXdr`, `buildRefundXdr` (non-custodial, return unsigned XDR)
+- Contract error codes (1–7) in simulation error strings mapped to `EscrowClientError`
+- All `TODO(escrow-v1)` markers and `"not yet implemented"` throws removed
+- Placeholder account key fixed: `GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5`
+
+**Decision — no new package:**
+`stellar-sdk@12.3.0` (already installed) ships full Soroban support. Adding `@stellar/stellar-sdk` separately was unnecessary and would risk package conflicts. The module docblock documents what a future migration to `@stellar/stellar-sdk@>=13` would require.
+
+**Verification:**
+
+| Command | Result |
+|---------|--------|
+| `npm test --testPathPattern='escrow-session\|http-soroban'` | 62 pass, 0 fail |
+| `npm run typecheck` | Clean |
+
+---
+
+#### Part 2 — Escrow HTTP endpoints
+
+**Files:**
+- `packages/server/src/escrow-router.ts` (new)
+- `packages/server/src/index.ts` (export added)
+- `packages/server/src/__tests__/escrow-router.test.ts` (new)
+- `packages/demo/src/server.ts` (escrow router mounted)
+- `packages/demo/.env.example` (ESCROW_CONTRACT_ID, SOROBAN_RPC_URL added)
+
+**Summary:**
+- `POST /api/escrow` — create session, validate inputs, return unsigned deposit XDR
+- `POST /api/escrow/:id/submit` — validate signed XDR (contract, method, source), submit, poll, update session
+- `POST /api/escrow/:id/release` — auth-gated (Bearer token), return unsigned release XDR
+- `POST /api/escrow/:id/refund` — payer or merchant caller, return unsigned refund XDR
+- `GET /api/escrow/:id` — read session + reconcile with on-chain state
+- 503 on all routes when `ESCROW_CONTRACT_ID` not set
+- XDR validation on submit: checks contract ID, method = `"deposit"`, source = `payerAddress`
+- Error mapping: `EscrowClientError` codes 1–7 → HTTP 4xx; `EscrowRpcError` kinds → 400/502/504
+- Classic `/api/checkout` routes untouched
+
+**Decision — new escrow-router.ts (not modifying checkout-router.ts):**
+Cleaner separation; zero risk to the existing classic flow; easier to review independently.
+
+**Decision — releaseApiKey reuses sessionsApiKey pattern:**
+Same Bearer token used for `GET /api/sessions` and `POST /api/escrow/:id/release`. Merchants configure one API key for both privileged endpoints.
+
+**Verification:**
+
+| Command | Result |
+|---------|--------|
+| `npm test --testPathPattern='escrow-router'` | 38 pass, 0 fail |
+| `npm test` (full suite) | 326 pass, 0 fail |
+| `npm run typecheck` | Clean |
+
+---
+
+#### Part 3 — Testnet proof script
+
+**File:** `scripts/escrow-testnet-demo.ts` (new)
+
+**Summary:**
+- Generates and Friendbot-funds a fresh payer + merchant keypair on each run
+- Uses native XLM SAC (`CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC`)
+- Order A: create → payer signs → submit → GET (Held) → release XDR → merchant signs → submit → GET (Released)
+- Order B: create → payer signs → submit → refund XDR (merchant) → merchant signs → submit → GET (Refunded)
+- Prints every tx hash + stellar.expert links
+
+**LIVE RUN STATUS: NOT RUN.** The server was not running and no deployed contract was available in the CI environment. The script typechecks cleanly. See README "How to run the testnet proof" for instructions.
+
+---
+
+#### Part 4 — Rust contract tests
+
+**BLOCKED:** `cargo` is not installed in this environment. The 17 Rust contract tests in `contracts/escrow/src/lib.rs` could not be run.
+
+**Important:** The Rust contract source (`lib.rs`) was **not modified** in this session. All 17 tests were passing before this session began and should still pass in an environment with Rust toolchain installed (`wasm32v1-none` target + soroban-sdk).
+
+**To verify:** In an environment with Rust:
+```bash
+cd contracts/escrow
+cargo fmt --check
+cargo clippy --target wasm32v1-none -- -D warnings
+cargo test
+```
+
+---
+
+#### Part 5 — Documentation
+
+**Files:**
+- `README.md` — "Two checkout modes" section added near top; "Soroban status" section rewritten; "How to run the testnet proof" added; contradiction ("not yet integrated" vs "Built & tested") resolved
+- `ARCHITECTURE.md` — "Soroban escrow data flow" section appended: sequence diagram, non-custodial split table, XDR validation steps, session lifecycle, contract error mapping
+- `SECURITY.md` — "Soroban escrow threat model" section appended: XDR substitution, deposit replay, merchant key handling, timeout semantics, session persistence, rate limiting
+- `EMMY_CHANGELOG.md` — this entry
+
+**Claim verification:** Every claim in the updated docs is matched to a test or the honest "not yet run" disclosure:
+
+| Claim | Backed by |
+|-------|-----------|
+| 326 TypeScript tests pass | `npm test` output in this session |
+| `HttpSorobanRpcClient` uses `stellar-sdk@12.3.0` | Code + `npm test` |
+| 5 escrow endpoints exist | 38 supertest tests |
+| Testnet script ready | `tsc --noEmit` passes |
+| Live testnet run not done | Explicit statement + server not running |
+| Rust contract not modified | `git diff contracts/escrow/src/lib.rs` = empty |
+| Rust tests not run | `cargo` not found |
+
+---
+
+
 
 **Branch:** `feat/quality-fixes-v0.3`
 **PR:** open — do not merge without explicit approval
