@@ -36,11 +36,47 @@ StellarFlow supports two independent checkout modes. They can run on the same se
 | `buildUnsignedContractTx` (non-custodial write) | ✅ 6 tests | `http-soroban-rpc-client.test.ts` |
 | `submitSignedTx` (poll-until-confirmed) | ✅ 6 tests | `http-soroban-rpc-client.test.ts` |
 | `invokeContract` (scripts/tests signer) | ✅ 3 tests | `http-soroban-rpc-client.test.ts` |
-| `POST /api/escrow` + 4 other endpoints | ✅ 38 supertest tests | `escrow-router.test.ts` |
-| Testnet proof script | ✅ Written, typechecks | `scripts/escrow-testnet-demo.ts` |
+| `POST /api/escrow` + 6 other endpoints | ✅ real-XDR supertest tests | `escrow-router.test.ts` |
+| Deposit XDR: full 6-arg validation (payer/merchant/amount/token/order_id/timeout) | ✅ one test per arg | `escrow-router.test.ts` |
+| Post-confirmation on-chain record verification | ✅ mismatch test | `escrow-router.test.ts` |
+| `POST /api/escrow/:id/release/submit` | ✅ 6 tests including wrong-contract/order_id/source | `escrow-router.test.ts` |
+| `POST /api/escrow/:id/refund/submit` | ✅ 6 tests including wrong-contract/order_id/third-party | `escrow-router.test.ts` |
+| Testnet proof script | ✅ Written, uses server endpoints, typechecks | `scripts/escrow-testnet-demo.ts` |
 | Live testnet run | ⏳ **Not yet run** — requires deployed contract + funded accounts | See below |
 
-**What "not yet run" means:** The TypeScript implementation is complete and all 66 new unit/integration tests pass. The escrow contract itself is not yet deployed to testnet by this author. The testnet proof script (`scripts/escrow-testnet-demo.ts`) is ready to execute once a contract is deployed.
+**What "not yet run" means:** The TypeScript implementation is complete and all 101 new unit/integration tests pass. The escrow contract itself is not yet deployed to testnet by this author. The testnet proof script (`scripts/escrow-testnet-demo.ts`) is ready to execute once a contract is deployed.
+
+---
+
+## Escrow trust model
+
+**What the server validates before forwarding a deposit to the chain:**
+
+1. XDR parses as a `Transaction` (not `FeeBump`)
+2. Exactly one `invokeHostFunction` operation
+3. Host function type is `invokeContract` (not `uploadContractWasm` or `createContract`)
+4. Operation has no per-op source account, OR it equals `session.payerAddress`
+5. Transaction source account equals `session.payerAddress`
+6. Invoked contract ID equals `session.contractId` (ESCROW_CONTRACT_ID)
+7. Method name equals `"deposit"`
+8. `arg[0]` payer equals `session.payerAddress` (exact)
+9. `arg[1]` merchant equals `session.merchantAddress` (exact)
+10. `arg[2]` amount equals `BigInt(session.amount)` (exact bigint — no loose comparison)
+11. `arg[3]` token equals `session.tokenContractId` (exact)
+12. `arg[4]` order\_id equals `session.orderId` bytes (exact 32-byte comparison)
+13. `arg[5]` timeout\_ledgers equals `session.requestedTimeoutLedgers` (exact)
+
+After the deposit transaction confirms on-chain, `getEscrow()` is called and the on-chain payer/merchant/amount/token are verified against the session a second time before setting status to `deposited`. A mismatch sets terminal status `mismatch` — the session is never promoted.
+
+**For release/submit and refund/submit:** same structural checks, with method == `"release"` / `"refund"`, tx source == merchant (release) or caller (refund), and the order\_id argument verified exactly.
+
+**What the wallet signs:** Everything. The server returns unsigned XDR; the wallet signs it; the server validates the signed XDR before submitting. The server never holds or sees a private key.
+
+**Session state:** In-memory only. A server restart loses session state. On-chain funds are still safe — the escrow contract holds them independently — but the server will lose knowledge of sessions created before the restart. Use `GET /api/escrow/:orderId` to reconcile once the session is re-created from on-chain data.
+
+**Single token per order:** Each escrow session is for one SAC token contract. The token is fixed at session creation and enforced in XDR validation.
+
+**All-or-nothing:** Release transfers the full deposited amount to the merchant. Refund returns the full amount to the payer. Partial amounts are not supported in v0.2.
 
 **Remaining limitations (v0.2):**
 - No partial refunds — refund always returns the full deposited amount
@@ -405,7 +441,11 @@ cd packages/server && npm test
    `expiresAt` need a manual query to resolve. A background sweep is a documented
    stretch goal.
 
-6. **Soroban not yet integrated.** See the [Soroban status](#soroban-status--honest-statement)
+6. **Soroban escrow: tested against a mocked network only.** The server validates every
+   XDR argument, verifies the on-chain record after confirmation (against a mock), and
+   all 101 escrow unit/integration tests pass. The contract has 17 Rust unit tests.
+   Neither has been run against a live testnet — that requires a deployed contract and
+   funded accounts. See the [Soroban escrow — honest status](#soroban-escrow--honest-status-v02)
    section above.
 
 ---
@@ -414,7 +454,7 @@ cd packages/server && npm test
 
 | Version | Feature |
 |---|---|
-| v0.2 | Soroban escrow checkout (built & tested — deploy pending; see `feat/soroban-escrow`) |
+| v0.2 | Soroban escrow checkout (built & tested against mocked network — live testnet deploy pending) |
 | v0.2 (future) | Escrow: partial releases/refunds (all-or-nothing in current version) |
 | v0.2 (future) | Escrow: third-party arbitration (no arbiter role in current version) |
 | v0.3 | Reflector on-chain price oracle (`ReflectorPriceSource` via `PriceSource` interface) |

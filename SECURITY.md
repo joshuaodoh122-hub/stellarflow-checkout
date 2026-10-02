@@ -146,18 +146,37 @@ sees a private key.
 
 ## Soroban escrow threat model (v0.2)
 
-### XDR substitution
+### XDR substitution (deposit argument forgery)
 
-**Threat:** An attacker intercepts the unsigned deposit XDR and replaces it with a transaction targeting a different contract, a different method (e.g. `release` instead of `deposit`), or a different beneficiary, then submits the replaced XDR via `POST /api/escrow/:id/submit`.
+**Threat:** A payer signs a deposit transaction with a different merchant, a smaller amount, a different token, a different `order_id`, or a different timeout, then submits it via `POST /api/escrow/:id/submit`. Without argument validation, the server would mark the session `deposited` even though the on-chain escrow does not match the agreed-upon order — the merchant could ship goods against an escrow worth almost nothing or belonging to a different session.
 
-**Mitigation:** The submit endpoint validates the parsed XDR before forwarding:
-1. Must be a `Transaction` (not `FeeBump`)
-2. Must contain exactly one `invokeHostFunction` operation
-3. Invoked contract ID must match `session.contractId` (ESCROW_CONTRACT_ID)
-4. Invoked method must be `"deposit"`
-5. Transaction source account must match `session.payerAddress`
+**Mitigation (XDR argument validation):** The submit endpoint decodes the signed XDR with `stellar-sdk` and validates every argument before sending anything to the network. Checks (in order):
+
+1. XDR parses as a `Transaction` (not `FeeBump`)
+2. Exactly one `invokeHostFunction` operation
+3. Host function type is `invokeContract` (not `uploadContractWasm` or `createContract`)
+4. Operation has no per-op source account, OR it equals `session.payerAddress`
+5. Transaction source account equals `session.payerAddress`
+6. Invoked contract ID equals `session.contractId`
+7. Method name equals `"deposit"`
+8. `arg[0]` payer equals `session.payerAddress` (exact string match)
+9. `arg[1]` merchant equals `session.merchantAddress` (exact string match)
+10. `arg[2]` amount equals `BigInt(session.amount)` (exact bigint — no loose comparison)
+11. `arg[3]` token equals `session.tokenContractId` (exact string match)
+12. `arg[4]` order\_id equals `session.orderId` bytes (exact 32-byte Buffer comparison)
+13. `arg[5]` timeout\_ledgers equals `session.requestedTimeoutLedgers` (exact u32 match)
 
 Failure on any check returns 400 and the XDR is discarded — nothing is sent to the network.
+
+**Mitigation (post-confirmation on-chain check):** After `submitSignedTx` returns a hash, `getEscrow()` is called and the on-chain `payer/merchant/amount/token` are verified against the session a second time. A mismatch sets terminal status `mismatch` — the session is never marked `deposited`. This defence-in-depth guard catches any inconsistency that slips past XDR validation (e.g., a bug in the decoder).
+
+The same structural checks apply to release and refund submit endpoints (method name, contract ID, order\_id, tx source verified against session.merchantAddress / callerAddress).
+
+### Order-ID predictability
+
+**Threat:** If order IDs are derived from a counter that resets on server restart, an attacker can guess the next order ID and deposit against it (with wrong amounts, tokens, or parties) before the legitimate payer, blocking the legitimate deposit with `AlreadyExists` on-chain.
+
+**Mitigation:** Each session is assigned a cryptographically random 32-byte `orderId` generated with `crypto.getRandomValues` (Node 18+ built-in). IDs are not derivable from session counter, timestamp, or any other observable value. The counter used for `sessionId` (human-facing) is separate from the on-chain `orderId`. Two sessions created consecutively will have statistically independent, non-guessable order IDs.
 
 ### Replay of a submitted deposit
 
@@ -165,7 +184,7 @@ Failure on any check returns 400 and the XDR is discarded — nothing is sent to
 
 **Mitigation (contract layer):** The escrow contract rejects any `deposit()` call for an `order_id` that already exists in persistent storage (`EscrowError::AlreadyExists` code 1). The contract is the canonical guard — the server cannot be bypassed.
 
-**Mitigation (server layer):** The session's status transitions from `pending` to a temporary lock before submission. A second concurrent submit attempt sees a non-`pending` status and is rejected with 409 before even reaching the XDR validation.
+**Mitigation (server layer):** The in-flight guard (`Set<string>`) prevents concurrent duplicate submits. A second concurrent submit attempt is rejected with 409 before XDR validation. Once the session transitions to `deposited` or `mismatch`, the status check rejects any further submit with 409.
 
 ### Merchant key handling
 
