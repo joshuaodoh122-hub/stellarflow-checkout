@@ -4,55 +4,62 @@
  * Express router exposing the StellarFlow Escrow Checkout API.
  *
  * Endpoints:
- *   POST /api/escrow                    Create an escrow session + unsigned deposit XDR
- *   POST /api/escrow/:orderId/submit    Accept wallet-signed deposit XDR, submit on-chain
- *   POST /api/escrow/:orderId/release   Return unsigned release XDR for merchant to sign
- *   POST /api/escrow/:orderId/refund    Return unsigned refund XDR for payer/merchant
- *   GET  /api/escrow/:orderId           Read on-chain + session state
+ *   POST /api/escrow                          Create session + unsigned deposit XDR
+ *   POST /api/escrow/:orderId/submit          Submit wallet-signed deposit XDR
+ *   POST /api/escrow/:orderId/release         Return unsigned release XDR
+ *   POST /api/escrow/:orderId/release/submit  Submit wallet-signed release XDR
+ *   POST /api/escrow/:orderId/refund          Return unsigned refund XDR
+ *   POST /api/escrow/:orderId/refund/submit   Submit wallet-signed refund XDR
+ *   GET  /api/escrow/:orderId                 Read on-chain + session state
  *
  * ## Non-custodial design
  *
  * The server NEVER holds or sees private keys on the normal request path.
+ * Every state-changing operation follows the unsigned→sign→submit pattern:
+ *   1. Server builds and returns UNSIGNED XDR (no key needed).
+ *   2. Wallet signs the XDR (off-server, in user's wallet).
+ *   3. Caller POSTs signed XDR to the /submit endpoint.
  *
- * - POST /api/escrow         → returns UNSIGNED deposit XDR (payer's wallet signs it)
- * - POST /api/escrow/submit  → accepts wallet-SIGNED deposit XDR, submits to chain
- * - POST /api/escrow/release → returns UNSIGNED release XDR (merchant's wallet signs it)
- * - POST /api/escrow/refund  → returns UNSIGNED refund XDR (payer/merchant's wallet signs it)
+ * ## XDR validation — what the server checks
  *
- * The wallet-to-server round trip (sign → submit) lets us validate that the
- * signed XDR actually targets the configured contract and method before
- * forwarding to the network (XDR substitution defence).
+ * For deposit /submit:
+ *   1. Parseable as Transaction (not FeeBump)
+ *   2. Exactly one operation of type invokeHostFunction
+ *   3. HostFunction type is invokeContract (not uploadContractWasm/createContract)
+ *   4. Operation has no separate source account OR its source == payerAddress
+ *   5. Transaction source account == session.payerAddress
+ *   6. Invoked contract ID == session.contractId
+ *   7. Method name == "deposit"
+ *   8. arg[0] (payer)    == session.payerAddress
+ *   9. arg[1] (merchant) == session.merchantAddress
+ *  10. arg[2] (amount)   == BigInt(session.amount) (exact bigint comparison)
+ *  11. arg[3] (token)    == session.tokenContractId
+ *  12. arg[4] (order_id) == session.orderId bytes (exact 32-byte comparison)
+ *  13. arg[5] (timeout)  == session.requestedTimeoutLedgers (exact u32 comparison)
+ *
+ * After on-chain confirmation, getEscrow() is called and payer/merchant/amount/token
+ * are verified against the session before setting status to 'deposited'. Mismatch
+ * sets a terminal 'mismatch' status.
+ *
+ * For release /submit:
+ *   Same structural checks (1–7), method == "release", arg[0] == session.orderId,
+ *   tx source == session.merchantAddress.
+ *
+ * For refund /submit:
+ *   Same structural checks (1–7), method == "refund", arg[0] == session.orderId,
+ *   arg[1] == callerAddress (payer or merchant), tx source == callerAddress.
  *
  * ## Configuration
  *
  * Required env vars (see packages/demo/.env.example):
  *   ESCROW_CONTRACT_ID  — deployed escrow contract Stellar address (C...)
- *   SOROBAN_RPC_URL     — Soroban RPC endpoint (default: testnet)
+ *   SOROBAN_RPC_URL     — Soroban RPC endpoint
  *
- * If either is unset, all escrow endpoints return 503 "escrow not configured".
- * The server never crashes on missing config.
- *
- * ## Authentication
- *
- * - POST /api/escrow/:orderId/release requires `Authorization: Bearer <sessionsApiKey>`
- *   (same API-key pattern as GET /api/sessions in checkout-router.ts).
- *   Rationale: release transfers funds to the merchant — we must confirm the
- *   caller is an authorised operator of this server, not an arbitrary third party.
- *
- * ## XDR Validation (submit endpoint)
- *
- * Before submitting a signed deposit XDR we validate:
- *   1. Parseable as a Transaction (not FeeBump)
- *   2. Contains exactly one invokeHostFunction operation
- *   3. The invoked contract ID matches the configured ESCROW_CONTRACT_ID
- *   4. The invoked method name is "deposit"
- *   5. The transaction source account matches the session's payerAddress
- *
- * Failure on any check → 400, XDR discarded, nothing submitted.
+ * If ESCROW_CONTRACT_ID is unset, all escrow endpoints return 503.
  */
 
 import { Router, type Request, type Response } from 'express';
-import { TransactionBuilder, StrKey, StrKey as StrKeyUtil } from 'stellar-sdk';
+import { TransactionBuilder, StrKey, scValToNative } from 'stellar-sdk';
 import { NETWORK_PASSPHRASES } from '@stellarflow/core';
 import type { StellarNetwork } from '@stellarflow/core';
 import {
@@ -61,81 +68,70 @@ import {
   EscrowRpcError,
   HttpSorobanRpcClient,
   SOROBAN_RPC_URLS,
-  sessionIdToOrderIdHex,
+  generateOrderId,
   escrowRecordToSessionStatus,
   type EscrowCheckoutSession,
   type SorobanRpcClient,
 } from './escrow-session';
 
-// ─── In-memory session store (simple map) ────────────────────────────────────
+// ─── In-memory session store ──────────────────────────────────────────────────
 
 /**
- * Simple in-memory store for EscrowCheckoutSession objects.
- * Keyed by orderId (64-char hex string).
- *
- * In production this should be replaced with a persistent store.
- * The same limitation applies to the classic CheckoutSession store.
+ * EscrowSessionStore encapsulates the in-memory session state.
+ * Instantiated per createEscrowRouter call so test routers don't share state.
  */
-const escrowSessions = new Map<string, EscrowCheckoutSession>();
+class EscrowSessionStore {
+  private readonly sessions = new Map<string, EscrowCheckoutSession>();
+  private counter = 0n;
 
-/** Monotonic session ID counter (mirrors classic SessionManager pattern). */
-let sessionCounter = 0n;
+  create(params: Omit<EscrowCheckoutSession, 'sessionId' | 'orderId' | 'status' | 'createdAt'>): EscrowCheckoutSession {
+    this.counter += 1n;
+    const sessionId = this.counter.toString();
+    const orderId = generateOrderId();
+    const session: EscrowCheckoutSession = {
+      ...params,
+      sessionId,
+      orderId,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    };
+    this.sessions.set(orderId, session);
+    return session;
+  }
 
-function createEscrowSession(
-  params: Omit<EscrowCheckoutSession, 'sessionId' | 'orderId' | 'status' | 'createdAt'>,
-): EscrowCheckoutSession {
-  sessionCounter += 1n;
-  const sessionId = sessionCounter.toString();
-  const orderId = sessionIdToOrderIdHex(sessionCounter);
-  const session: EscrowCheckoutSession = {
-    ...params,
-    sessionId,
-    orderId,
-    status: 'pending',
-    createdAt: new Date().toISOString(),
-  };
-  escrowSessions.set(orderId, session);
-  return session;
-}
+  get(orderId: string): EscrowCheckoutSession | undefined {
+    return this.sessions.get(orderId);
+  }
 
-function getEscrowSession(orderId: string): EscrowCheckoutSession | undefined {
-  return escrowSessions.get(orderId);
-}
+  update(orderId: string, updates: Partial<EscrowCheckoutSession>): void {
+    const session = this.sessions.get(orderId);
+    if (session) {
+      this.sessions.set(orderId, { ...session, ...updates });
+    }
+  }
 
-function updateEscrowSession(orderId: string, updates: Partial<EscrowCheckoutSession>): void {
-  const session = escrowSessions.get(orderId);
-  if (session) {
-    escrowSessions.set(orderId, { ...session, ...updates });
+  delete(orderId: string): void {
+    this.sessions.delete(orderId);
   }
 }
 
 // ─── Router options ───────────────────────────────────────────────────────────
 
 export interface EscrowRouterOptions {
-  /** Soroban RPC client — inject a mock for testing. Defaults to HttpSorobanRpcClient. */
   rpcClient?: SorobanRpcClient;
-  /** Deployed escrow contract address (C...). If undefined → 503 on all routes. */
   contractId?: string;
-  /** Network (testnet/mainnet). */
   network: StellarNetwork;
   /**
-   * API key for the release endpoint (same pattern as sessionsApiKey in checkout-router).
-   * If set, POST /api/escrow/:orderId/release requires `Authorization: Bearer <key>`.
-   * If unset, the release endpoint is open (acceptable only for local dev).
+   * If set, POST /release and POST /release/submit require
+   * `Authorization: Bearer <releaseApiKey>`.
    */
   releaseApiKey?: string;
-  /**
-   * Timeout ledgers for new escrow deposits.
-   * Defaults to 0 (uses the contract's DEFAULT_TIMEOUT_LEDGERS = 518_400).
-   */
   defaultTimeoutLedgers?: number;
+  /** Inject a custom store for testing. If omitted, a fresh store is created. */
+  sessionStore?: EscrowSessionStore;
 }
 
-// ─── Timeout ledger bounds ────────────────────────────────────────────────────
-
-/** Minimum timeout: 1 ledger (must be positive to be meaningful) */
 const MIN_TIMEOUT_LEDGERS = 1;
-/** Maximum timeout: ~1 year in ledgers at ~5s/ledger */
 const MAX_TIMEOUT_LEDGERS = 6_307_200;
 
 // ─── Router factory ───────────────────────────────────────────────────────────
@@ -144,45 +140,41 @@ export function createEscrowRouter(opts: EscrowRouterOptions): Router {
   const router = Router();
   const { network, releaseApiKey, defaultTimeoutLedgers = 0 } = opts;
 
-  // Determine if escrow is configured
   const contractId = opts.contractId;
   const isConfigured = !!contractId;
 
-  // Build the RPC client (injected mock in tests, real client in production)
   const rpcClient: SorobanRpcClient =
     opts.rpcClient ??
-    (isConfigured
-      ? new HttpSorobanRpcClient(SOROBAN_RPC_URLS[network], network)
-      : // Placeholder that always throws — only reached if isConfigured is true
-        new HttpSorobanRpcClient(SOROBAN_RPC_URLS[network], network));
+    new HttpSorobanRpcClient(SOROBAN_RPC_URLS[network], network);
 
-  // EscrowClient wraps the RPC client with contract-specific logic
   const escrowClient = isConfigured
     ? new EscrowClient({ rpcClient, contractId: contractId!, network })
     : null;
 
-  // Network passphrase for XDR validation
   const networkPassphrase = NETWORK_PASSPHRASES[network];
+  const store = opts.sessionStore ?? new EscrowSessionStore();
 
-  // ─── 503 guard ─────────────────────────────────────────────────────────────
+  /**
+   * In-flight guard: set of orderIds currently being submitted to chain.
+   * Prevents concurrent duplicate submissions without leaving sessions in
+   * a stuck 'failed' state if the process crashes mid-submit.
+   */
+  const inFlight = new Set<string>();
 
-  /** Return 503 if escrow is not configured. */
+  // ─── Guards ──────────────────────────────────────────────────────────────
+
   function notConfigured(res: Response): boolean {
     if (!isConfigured || !escrowClient) {
       res.status(503).json({
-        error:
-          'Escrow checkout is not configured. Set ESCROW_CONTRACT_ID and SOROBAN_RPC_URL environment variables.',
+        error: 'Escrow checkout is not configured. Set ESCROW_CONTRACT_ID and SOROBAN_RPC_URL.',
       });
       return true;
     }
     return false;
   }
 
-  // ─── Auth guard ─────────────────────────────────────────────────────────────
-
-  /** Enforce Bearer token auth for merchant-only endpoints. */
   function requireReleaseAuth(req: Request, res: Response): boolean {
-    if (!releaseApiKey) return false; // open in dev
+    if (!releaseApiKey) return false;
     const auth = req.headers['authorization'];
     if (!auth || auth !== `Bearer ${releaseApiKey}`) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -191,22 +183,14 @@ export function createEscrowRouter(opts: EscrowRouterOptions): Router {
     return false;
   }
 
-  // ─── Error mapper ──────────────────────────────────────────────────────────
+  // ─── Error mapper ─────────────────────────────────────────────────────────
 
-  /** Map EscrowClientError / EscrowRpcError to HTTP responses. */
   function handleEscrowError(err: unknown, res: Response, context: string): void {
     if (err instanceof EscrowClientError) {
       const statusMap: Record<number, number> = {
-        1: 409, // AlreadyExists
-        2: 404, // NotFound
-        3: 409, // AlreadyReleased
-        4: 409, // AlreadyRefunded
-        5: 403, // NotMerchant
-        6: 403, // NotAuthorized
-        7: 409, // TimeoutNotElapsed
+        1: 409, 2: 404, 3: 409, 4: 409, 5: 403, 6: 403, 7: 409,
       };
-      const httpStatus = statusMap[err.code] ?? 400;
-      res.status(httpStatus).json({
+      res.status(statusMap[err.code] ?? 400).json({
         error: `Contract error: ${err.codeName} (code ${err.code})`,
         code: err.codeName,
       });
@@ -214,12 +198,8 @@ export function createEscrowRouter(opts: EscrowRouterOptions): Router {
     }
     if (err instanceof EscrowRpcError) {
       const kindMap: Record<EscrowRpcError['kind'], number> = {
-        SIMULATION_FAILED: 400,
-        SEND_FAILED: 502,
-        TX_FAILED: 400,
-        POLL_TIMEOUT: 504,
-        INVALID_XDR: 400,
-        NETWORK_ERROR: 502,
+        SIMULATION_FAILED: 400, SEND_FAILED: 502, TX_FAILED: 400,
+        POLL_TIMEOUT: 504, INVALID_XDR: 400, NETWORK_ERROR: 502,
       };
       res.status(kindMap[err.kind] ?? 502).json({
         error: `RPC error [${err.kind}]: ${err.detail ?? err.message}`,
@@ -231,36 +211,14 @@ export function createEscrowRouter(opts: EscrowRouterOptions): Router {
     res.status(500).json({ error: 'Internal server error' });
   }
 
-  // ─── POST /api/escrow ──────────────────────────────────────────────────────
+  // ─── POST /api/escrow ─────────────────────────────────────────────────────
 
-  /**
-   * Create an escrow session and return the unsigned deposit XDR.
-   *
-   * Body:
-   *   {
-   *     payerAddress: string,     // G... Stellar public key
-   *     merchantAddress: string,  // G... Stellar public key
-   *     tokenContractId: string,  // C... SAC contract address
-   *     amount: string,           // positive integer (token's smallest unit)
-   *     timeoutLedgers?: number   // optional; defaults to contract default
-   *   }
-   *
-   * Returns:
-   *   { orderId, sessionId, status, unsignedDepositXdr, networkPassphrase, createdAt }
-   */
   router.post('/escrow', async (req: Request, res: Response) => {
     if (notConfigured(res)) return;
     try {
       const { payerAddress, merchantAddress, tokenContractId, amount, timeoutLedgers } =
-        req.body as {
-          payerAddress?: unknown;
-          merchantAddress?: unknown;
-          tokenContractId?: unknown;
-          amount?: unknown;
-          timeoutLedgers?: unknown;
-        };
+        req.body as Record<string, unknown>;
 
-      // ── Validate inputs ───────────────────────────────────────────────────
       if (typeof payerAddress !== 'string' || !StrKey.isValidEd25519PublicKey(payerAddress)) {
         res.status(400).json({ error: 'payerAddress must be a valid Stellar public key (G...)' });
         return;
@@ -269,10 +227,7 @@ export function createEscrowRouter(opts: EscrowRouterOptions): Router {
         res.status(400).json({ error: 'merchantAddress must be a valid Stellar public key (G...)' });
         return;
       }
-      if (
-        typeof tokenContractId !== 'string' ||
-        !StrKey.isValidContract(tokenContractId)
-      ) {
+      if (typeof tokenContractId !== 'string' || !StrKey.isValidContract(tokenContractId)) {
         res.status(400).json({ error: 'tokenContractId must be a valid Stellar contract address (C...)' });
         return;
       }
@@ -280,6 +235,7 @@ export function createEscrowRouter(opts: EscrowRouterOptions): Router {
         res.status(400).json({ error: 'amount must be a positive integer string (token smallest unit)' });
         return;
       }
+      let effectiveTimeout = defaultTimeoutLedgers;
       if (timeoutLedgers !== undefined) {
         if (typeof timeoutLedgers !== 'number' || !Number.isInteger(timeoutLedgers) ||
           timeoutLedgers < MIN_TIMEOUT_LEDGERS || timeoutLedgers > MAX_TIMEOUT_LEDGERS) {
@@ -288,31 +244,34 @@ export function createEscrowRouter(opts: EscrowRouterOptions): Router {
           });
           return;
         }
+        effectiveTimeout = timeoutLedgers as number;
       }
 
-      // ── Create session ────────────────────────────────────────────────────
-      const session = createEscrowSession({
+      // Create session (assigns random orderId)
+      const session = store.create({
         payerAddress,
         merchantAddress,
         tokenContractId,
         amount,
+        requestedTimeoutLedgers: effectiveTimeout,
         network,
         contractId: contractId!,
       });
 
-      // ── Build unsigned deposit XDR ────────────────────────────────────────
-      const effectiveTimeout =
-        timeoutLedgers !== undefined ? (timeoutLedgers as number) : defaultTimeoutLedgers;
-
-      const { unsignedXdr, networkPassphrase: passphrase } =
-        await escrowClient!.buildDepositXdr(
-          payerAddress,
-          merchantAddress,
-          BigInt(amount),
-          tokenContractId,
-          session.orderId,
-          effectiveTimeout,
+      // Build unsigned XDR. If this fails, remove the orphan session.
+      let unsignedXdr: string;
+      let passphrase: string;
+      try {
+        const result = await escrowClient!.buildDepositXdr(
+          payerAddress, merchantAddress, BigInt(amount), tokenContractId,
+          session.orderId, effectiveTimeout,
         );
+        unsignedXdr = result.unsignedXdr;
+        passphrase = result.networkPassphrase;
+      } catch (err) {
+        store.delete(session.orderId);
+        throw err;
+      }
 
       res.status(201).json({
         orderId: session.orderId,
@@ -329,34 +288,18 @@ export function createEscrowRouter(opts: EscrowRouterOptions): Router {
 
   // ─── POST /api/escrow/:orderId/submit ─────────────────────────────────────
 
-  /**
-   * Accept a wallet-signed deposit XDR, validate it, submit to chain,
-   * and update session status to 'deposited' on success.
-   *
-   * Body: { signedDepositXdr: string }
-   *
-   * Validation (in order):
-   *   1. Session exists and is 'pending'
-   *   2. XDR parses as a Transaction (not FeeBump)
-   *   3. Contains exactly one invokeHostFunction operation
-   *   4. Invoked contract ID == session.contractId
-   *   5. Invoked method == "deposit"
-   *   6. Transaction source == session.payerAddress
-   *
-   * Returns: { txHash, status: 'deposited' }
-   */
   router.post('/escrow/:orderId/submit', async (req: Request, res: Response) => {
     if (notConfigured(res)) return;
     try {
       const { orderId } = req.params;
-      const { signedDepositXdr } = req.body as { signedDepositXdr?: unknown };
+      const { signedDepositXdr } = req.body as Record<string, unknown>;
 
       if (typeof signedDepositXdr !== 'string' || !signedDepositXdr) {
         res.status(400).json({ error: 'signedDepositXdr is required' });
         return;
       }
 
-      const session = getEscrowSession(orderId ?? '');
+      const session = store.get(orderId ?? '');
       if (!session) {
         res.status(404).json({ error: 'Escrow session not found' });
         return;
@@ -366,101 +309,84 @@ export function createEscrowRouter(opts: EscrowRouterOptions): Router {
         return;
       }
 
-      // ── Parse XDR ─────────────────────────────────────────────────────────
-      let tx: ReturnType<typeof TransactionBuilder.fromXDR>;
+      // In-flight guard: prevent concurrent duplicate submits
+      if (inFlight.has(orderId)) {
+        res.status(409).json({ error: 'Deposit submission already in progress for this session' });
+        return;
+      }
+
+      // Parse XDR
+      let tx: import('stellar-sdk').Transaction;
       try {
-        tx = TransactionBuilder.fromXDR(signedDepositXdr, networkPassphrase);
+        const parsed = TransactionBuilder.fromXDR(signedDepositXdr, networkPassphrase);
+        if (!('operations' in parsed)) {
+          res.status(400).json({ error: 'FeeBump transactions are not accepted' });
+          return;
+        }
+        tx = parsed as import('stellar-sdk').Transaction;
       } catch {
         res.status(400).json({ error: 'Invalid transaction XDR' });
         return;
       }
 
-      if (!('operations' in tx)) {
-        res.status(400).json({ error: 'FeeBump transactions are not accepted' });
+      // Validate the deposit arguments
+      const depositValidationError = validateDepositArgs(tx, session, networkPassphrase);
+      if (depositValidationError) {
+        res.status(400).json({ error: depositValidationError });
         return;
       }
 
-      // Cast to Transaction now that we've confirmed it's not a FeeBump
-      const innerTx = tx as import('stellar-sdk').Transaction;
-
-      // ── Validate operations ────────────────────────────────────────────────
-      const ops = innerTx.operations;
-      if (ops.length !== 1) {
-        res.status(400).json({ error: `Expected exactly 1 operation, got ${ops.length}` });
-        return;
-      }
-
-      const op = ops[0]!;
-      if (op.type !== 'invokeHostFunction') {
-        res.status(400).json({ error: `Expected invokeHostFunction, got ${op.type}` });
-        return;
-      }
-
-      // Validate source account is the payer
-      const txSource = innerTx.source;
-      if (txSource !== session.payerAddress) {
-        res.status(400).json({
-          error: `Transaction source ${txSource} does not match payer ${session.payerAddress}`,
-        });
-        return;
-      }
-
-      // ── Validate contract & method from XDR ───────────────────────────────
-      const xdrValidationError = validateDepositXdrOp(op, session.contractId, session.orderId);
-      if (xdrValidationError) {
-        res.status(400).json({ error: xdrValidationError });
-        return;
-      }
-
-      // ── Mark submitting (double-submit guard) ─────────────────────────────
-      updateEscrowSession(orderId, { status: 'failed' }); // hold slot
-
-      // ── Submit ─────────────────────────────────────────────────────────────
+      // In-flight: mark before async submit, clear in finally
+      inFlight.add(orderId);
       let txHash: string;
       try {
-        const result = await rpcClient.submitSignedTx({
-          signedXdr: signedDepositXdr,
-          networkPassphrase,
-        });
+        const result = await rpcClient.submitSignedTx({ signedXdr: signedDepositXdr, networkPassphrase });
         txHash = result.txHash;
       } catch (err) {
-        // Roll back to pending on failure so the payer can retry
-        updateEscrowSession(orderId, { status: 'pending' });
+        inFlight.delete(orderId);
         throw err;
       }
+      inFlight.delete(orderId);
 
-      updateEscrowSession(orderId, { status: 'deposited' });
+      // Post-confirmation on-chain verification (Fix 1c)
+      // Read the on-chain record and verify it matches the session before
+      // marking deposited. If getEscrow throws (e.g. POLL_TIMEOUT from RPC),
+      // the outer catch handles it — session stays pending for retry.
+      const record = await escrowClient!.getEscrow(session.orderId);
+      const mismatch = verifyOnChainRecord(record, session);
+      if (mismatch) {
+        store.update(orderId, { status: 'mismatch' });
+        res.status(400).json({
+          error: `On-chain record does not match session: ${mismatch}`,
+          txHash,
+          status: 'mismatch',
+        });
+        return;
+      }
 
+      store.update(orderId, { status: 'deposited' });
       res.json({ txHash, status: 'deposited', orderId });
     } catch (err) {
+      inFlight.delete(req.params.orderId ?? '');
       handleEscrowError(err, res, 'POST /escrow/:orderId/submit');
     }
   });
 
   // ─── POST /api/escrow/:orderId/release ────────────────────────────────────
 
-  /**
-   * Return an unsigned release XDR for the merchant's wallet to sign.
-   *
-   * Auth: requires Bearer token matching releaseApiKey (if configured).
-   *
-   * Body: { merchantAddress: string }
-   *
-   * Returns: { unsignedReleaseXdr, networkPassphrase }
-   */
   router.post('/escrow/:orderId/release', async (req: Request, res: Response) => {
     if (notConfigured(res)) return;
     if (requireReleaseAuth(req, res)) return;
     try {
       const { orderId } = req.params;
-      const { merchantAddress } = req.body as { merchantAddress?: unknown };
+      const { merchantAddress } = req.body as Record<string, unknown>;
 
       if (typeof merchantAddress !== 'string' || !StrKey.isValidEd25519PublicKey(merchantAddress)) {
         res.status(400).json({ error: 'merchantAddress must be a valid Stellar public key (G...)' });
         return;
       }
 
-      const session = getEscrowSession(orderId ?? '');
+      const session = store.get(orderId ?? '');
       if (!session) {
         res.status(404).json({ error: 'Escrow session not found' });
         return;
@@ -481,102 +407,225 @@ export function createEscrowRouter(opts: EscrowRouterOptions): Router {
       const { unsignedXdr, networkPassphrase: passphrase } =
         await escrowClient!.buildReleaseXdr(session.orderId, merchantAddress);
 
-      res.json({
-        unsignedReleaseXdr: unsignedXdr,
-        networkPassphrase: passphrase,
-        orderId,
-      });
+      res.json({ unsignedReleaseXdr: unsignedXdr, networkPassphrase: passphrase, orderId });
     } catch (err) {
       handleEscrowError(err, res, 'POST /escrow/:orderId/release');
     }
   });
 
+  // ─── POST /api/escrow/:orderId/release/submit ─────────────────────────────
+
+  router.post('/escrow/:orderId/release/submit', async (req: Request, res: Response) => {
+    if (notConfigured(res)) return;
+    if (requireReleaseAuth(req, res)) return;
+    try {
+      const { orderId } = req.params;
+      const { signedReleaseXdr } = req.body as Record<string, unknown>;
+
+      if (typeof signedReleaseXdr !== 'string' || !signedReleaseXdr) {
+        res.status(400).json({ error: 'signedReleaseXdr is required' });
+        return;
+      }
+
+      const session = store.get(orderId ?? '');
+      if (!session) {
+        res.status(404).json({ error: 'Escrow session not found' });
+        return;
+      }
+      if (session.status !== 'deposited') {
+        res.status(409).json({ error: `Session is ${session.status}, not deposited` });
+        return;
+      }
+
+      if (inFlight.has(orderId + ':release')) {
+        res.status(409).json({ error: 'Release submission already in progress' });
+        return;
+      }
+
+      // Parse and validate release XDR
+      let tx: import('stellar-sdk').Transaction;
+      try {
+        const parsed = TransactionBuilder.fromXDR(signedReleaseXdr, networkPassphrase);
+        if (!('operations' in parsed)) {
+          res.status(400).json({ error: 'FeeBump transactions are not accepted' });
+          return;
+        }
+        tx = parsed as import('stellar-sdk').Transaction;
+      } catch {
+        res.status(400).json({ error: 'Invalid transaction XDR' });
+        return;
+      }
+
+      const releaseValidationError = validateReleaseArgs(tx, session, networkPassphrase);
+      if (releaseValidationError) {
+        res.status(400).json({ error: releaseValidationError });
+        return;
+      }
+
+      inFlight.add(orderId + ':release');
+      let txHash: string;
+      try {
+        const result = await rpcClient.submitSignedTx({ signedXdr: signedReleaseXdr, networkPassphrase });
+        txHash = result.txHash;
+      } catch (err) {
+        inFlight.delete(orderId + ':release');
+        throw err;
+      }
+      inFlight.delete(orderId + ':release');
+
+      // Post-confirmation: verify Released on-chain
+      const releaseRecord = await escrowClient!.getEscrow(session.orderId);
+      if (releaseRecord.status !== 'Released') {
+        res.status(400).json({
+          error: `On-chain status is ${releaseRecord.status}, expected Released`,
+          txHash,
+        });
+        return;
+      }
+
+      store.update(orderId, { status: 'fulfilled' });
+      res.json({ txHash, status: 'fulfilled', orderId });
+    } catch (err) {
+      inFlight.delete((req.params.orderId ?? '') + ':release');
+      handleEscrowError(err, res, 'POST /escrow/:orderId/release/submit');
+    }
+  });
+
   // ─── POST /api/escrow/:orderId/refund ─────────────────────────────────────
 
-  /**
-   * Return an unsigned refund XDR for the caller (payer or merchant) to sign.
-   *
-   * The contract enforces who may refund:
-   *   - Merchant: any time, no timeout
-   *   - Payer: only after timeout_ledgers have elapsed since deposit
-   *
-   * Body: { callerAddress: string }
-   *
-   * Returns: { unsignedRefundXdr, networkPassphrase }
-   */
   router.post('/escrow/:orderId/refund', async (req: Request, res: Response) => {
     if (notConfigured(res)) return;
     try {
       const { orderId } = req.params;
-      const { callerAddress } = req.body as { callerAddress?: unknown };
+      const { callerAddress } = req.body as Record<string, unknown>;
 
       if (typeof callerAddress !== 'string' || !StrKey.isValidEd25519PublicKey(callerAddress)) {
         res.status(400).json({ error: 'callerAddress must be a valid Stellar public key (G...)' });
         return;
       }
 
-      const session = getEscrowSession(orderId ?? '');
+      const session = store.get(orderId ?? '');
       if (!session) {
         res.status(404).json({ error: 'Escrow session not found' });
         return;
       }
       if (session.status !== 'deposited') {
-        res.status(409).json({
-          error: `Session is ${session.status}, not deposited. Refund is only valid on a deposited escrow.`,
-        });
+        res.status(409).json({ error: `Session is ${session.status}, not deposited` });
         return;
       }
-
-      // Server-side check: caller must be payer or merchant
-      // (the contract enforces this on-chain too, but reject early for UX)
       if (callerAddress !== session.payerAddress && callerAddress !== session.merchantAddress) {
-        res.status(403).json({
-          error: 'callerAddress must be either the payer or merchant for this session',
-        });
+        res.status(403).json({ error: 'callerAddress must be either the payer or merchant for this session' });
         return;
       }
 
       const { unsignedXdr, networkPassphrase: passphrase } =
         await escrowClient!.buildRefundXdr(session.orderId, callerAddress);
 
-      res.json({
-        unsignedRefundXdr: unsignedXdr,
-        networkPassphrase: passphrase,
-        orderId,
-      });
+      res.json({ unsignedRefundXdr: unsignedXdr, networkPassphrase: passphrase, orderId });
     } catch (err) {
       handleEscrowError(err, res, 'POST /escrow/:orderId/refund');
     }
   });
 
+  // ─── POST /api/escrow/:orderId/refund/submit ──────────────────────────────
+
+  router.post('/escrow/:orderId/refund/submit', async (req: Request, res: Response) => {
+    if (notConfigured(res)) return;
+    try {
+      const { orderId } = req.params;
+      const { signedRefundXdr, callerAddress } = req.body as Record<string, unknown>;
+
+      if (typeof signedRefundXdr !== 'string' || !signedRefundXdr) {
+        res.status(400).json({ error: 'signedRefundXdr is required' });
+        return;
+      }
+      if (typeof callerAddress !== 'string' || !StrKey.isValidEd25519PublicKey(callerAddress)) {
+        res.status(400).json({ error: 'callerAddress must be a valid Stellar public key (G...)' });
+        return;
+      }
+
+      const session = store.get(orderId ?? '');
+      if (!session) {
+        res.status(404).json({ error: 'Escrow session not found' });
+        return;
+      }
+      if (session.status !== 'deposited') {
+        res.status(409).json({ error: `Session is ${session.status}, not deposited` });
+        return;
+      }
+      if (callerAddress !== session.payerAddress && callerAddress !== session.merchantAddress) {
+        res.status(403).json({ error: 'callerAddress must be either the payer or merchant' });
+        return;
+      }
+
+      if (inFlight.has(orderId + ':refund')) {
+        res.status(409).json({ error: 'Refund submission already in progress' });
+        return;
+      }
+
+      let tx: import('stellar-sdk').Transaction;
+      try {
+        const parsed = TransactionBuilder.fromXDR(signedRefundXdr, networkPassphrase);
+        if (!('operations' in parsed)) {
+          res.status(400).json({ error: 'FeeBump transactions are not accepted' });
+          return;
+        }
+        tx = parsed as import('stellar-sdk').Transaction;
+      } catch {
+        res.status(400).json({ error: 'Invalid transaction XDR' });
+        return;
+      }
+
+      const refundValidationError = validateRefundArgs(tx, session, callerAddress, networkPassphrase);
+      if (refundValidationError) {
+        res.status(400).json({ error: refundValidationError });
+        return;
+      }
+
+      inFlight.add(orderId + ':refund');
+      let txHash: string;
+      try {
+        const result = await rpcClient.submitSignedTx({ signedXdr: signedRefundXdr, networkPassphrase });
+        txHash = result.txHash;
+      } catch (err) {
+        inFlight.delete(orderId + ':refund');
+        throw err;
+      }
+      inFlight.delete(orderId + ':refund');
+
+      // Post-confirmation: verify Refunded on-chain
+      const refundRecord = await escrowClient!.getEscrow(session.orderId);
+      if (refundRecord.status !== 'Refunded') {
+        res.status(400).json({
+          error: `On-chain status is ${refundRecord.status}, expected Refunded`,
+          txHash,
+        });
+        return;
+      }
+
+      store.update(orderId, { status: 'refunded' });
+      res.json({ txHash, status: 'refunded', orderId });
+    } catch (err) {
+      inFlight.delete((req.params.orderId ?? '') + ':refund');
+      handleEscrowError(err, res, 'POST /escrow/:orderId/refund/submit');
+    }
+  });
+
   // ─── GET /api/escrow/:orderId ─────────────────────────────────────────────
 
-  /**
-   * Read on-chain state via simulateContract and reconcile with session status.
-   *
-   * The session status in memory is the server's view; the on-chain status is
-   * the canonical source of truth. If they disagree (e.g. the deposit was
-   * submitted directly without going through /submit), the on-chain status wins
-   * and the session is updated.
-   *
-   * Returns:
-   *   { orderId, status, onChain: EscrowRecord | null, session: EscrowCheckoutSession }
-   */
   router.get('/escrow/:orderId', async (req: Request, res: Response) => {
     if (notConfigured(res)) return;
     try {
       const { orderId } = req.params;
 
-      const session = getEscrowSession(orderId ?? '');
+      const session = store.get(orderId ?? '');
       if (!session) {
         res.status(404).json({ error: 'Escrow session not found' });
         return;
       }
 
-      // Attempt on-chain read; if the escrow doesn't exist yet (pending before
-      // first deposit), the contract returns NotFound — that's normal.
-      let onChain: ReturnType<typeof escrowRecordToSessionStatus> | null = null;
       let onChainRecord: unknown = null;
+      let reconcileError: string | null = null;
 
       try {
         const record = await escrowClient!.getEscrow(session.orderId);
@@ -589,28 +638,38 @@ export function createEscrowRouter(opts: EscrowRouterOptions): Router {
           deposited_at: record.deposited_at,
           timeout_ledgers: record.timeout_ledgers,
         };
-        onChain = escrowRecordToSessionStatus(record);
 
-        // Reconcile: on-chain wins if the session status is stale
-        const currentSession = getEscrowSession(orderId ?? '')!;
-        if (onChain !== currentSession.status && currentSession.status !== 'failed') {
-          updateEscrowSession(orderId ?? '', { status: onChain });
+        // Only reconcile status if payer/merchant/amount/token match the session.
+        // If they don't match, do NOT promote the session and report the discrepancy.
+        const mismatch = verifyOnChainRecord(record, session);
+        if (mismatch) {
+          reconcileError = `On-chain record does not match session: ${mismatch}`;
+          // Do not update status — return discrepancy for investigation
+        } else {
+          const onChainStatus = escrowRecordToSessionStatus(record);
+          const current = store.get(orderId ?? '')!;
+          // Only update if not already in a terminal mismatch/failed state
+          if (current.status !== 'mismatch' && current.status !== 'failed') {
+            if (onChainStatus !== current.status) {
+              store.update(orderId ?? '', { status: onChainStatus });
+            }
+          }
         }
       } catch (rpcErr) {
-        // EscrowClientError code 2 = NotFound = not yet deposited = fine
         if (rpcErr instanceof EscrowClientError && rpcErr.code === 2) {
-          onChain = null;
+          // NotFound = not yet deposited on-chain, normal for pending sessions
+          onChainRecord = null;
         } else {
-          // Other RPC errors — include in response but don't fail the whole call
           console.warn('[escrow] GET on-chain read failed:', rpcErr);
         }
       }
 
-      const latestSession = getEscrowSession(orderId ?? '')!;
+      const latestSession = store.get(orderId ?? '')!;
       res.json({
         orderId,
         status: latestSession.status,
         onChain: onChainRecord,
+        reconcileError,
         session: {
           sessionId: latestSession.sessionId,
           payerAddress: latestSession.payerAddress,
@@ -633,90 +692,317 @@ export function createEscrowRouter(opts: EscrowRouterOptions): Router {
 // ─── XDR validation helpers ───────────────────────────────────────────────────
 
 /**
- * Validate that an invokeHostFunction operation targets the correct contract
- * and method for a deposit call.
- *
- * Returns an error string if invalid, or null if valid.
- *
- * We parse the operation's HostFunction XDR to extract:
- *   - The contract address (must match configured contractId)
- *   - The function name (must be "deposit")
- *
- * This is the XDR substitution defence: a payer cannot submit a signed XDR
- * for a different contract or method and have it forwarded as a deposit.
+ * Extract the invokeContract call from an invokeHostFunction operation.
+ * Returns an error string if the operation is not a valid invokeContract call.
  */
-function validateDepositXdrOp(
-  op: { type: string },
-  expectedContractId: string,
-  _expectedOrderId: string,
-): string | null {
-  try {
-    // The operation is an invokeHostFunction from stellar-sdk.
-    // Access the underlying XDR to extract contract and function name.
-    const opAny = op as {
-      func?: {
-        invokeContract?: () => {
-          contractAddress?: () => { contractId?: () => Buffer };
-          functionName?: () => { toString?: () => string };
-        };
+function extractInvokeContract(op: { type: string }): {
+  ic: { functionName: () => { toString: () => string }; args: () => unknown[] };
+  contractAddress: string;
+} | { error: string } {
+  if (op.type !== 'invokeHostFunction') {
+    return { error: `Expected invokeHostFunction operation, got ${op.type}` };
+  }
+
+  const opAny = op as {
+    func?: {
+      switch: () => { name: string };
+      invokeContract?: () => {
+        contractAddress: () => { contractId: () => Buffer };
+        functionName: () => { toString: () => string };
+        args: () => unknown[];
       };
     };
+  };
 
-    const invokeContract = opAny.func?.invokeContract?.();
-    if (!invokeContract) {
-      return 'Operation hostFunction does not contain an invokeContract call';
-    }
-
-    // Extract the function name (method)
-    const fnName = invokeContract.functionName?.().toString?.() ?? '';
-    if (fnName !== 'deposit') {
-      return `Expected contract method "deposit", got "${fnName}"`;
-    }
-
-    // Extract the contract address and compare to expected
-    const contractIdBytes = invokeContract.contractAddress?.().contractId?.();
-    if (!contractIdBytes) {
-      return 'Cannot extract contract address from XDR';
-    }
-
-    // Convert the contract ID bytes to a Stellar contract address (C...)
-    const contractAddress = StrKeyUtil.encodeContract(contractIdBytes);
-    if (contractAddress !== expectedContractId) {
-      return `Contract address mismatch: expected ${expectedContractId}, got ${contractAddress}`;
-    }
-
-    return null;
-  } catch (e) {
-    // If XDR parsing fails, that itself is a validation failure
-    return `XDR validation error: ${String(e)}`;
+  const funcSwitch = opAny.func?.switch()?.name;
+  if (funcSwitch !== 'hostFunctionTypeInvokeContract') {
+    return { error: `HostFunction type must be invokeContract, got ${funcSwitch ?? 'unknown'}` };
   }
+
+  const ic = opAny.func?.invokeContract?.();
+  if (!ic) {
+    return { error: 'Cannot access invokeContract from operation' };
+  }
+
+  let contractAddress: string;
+  try {
+    contractAddress = StrKey.encodeContract(ic.contractAddress().contractId());
+  } catch (e) {
+    return { error: `Cannot decode contract address: ${String(e)}` };
+  }
+
+  return { ic, contractAddress };
+}
+
+/**
+ * Validate a signed deposit transaction's arguments against the session.
+ *
+ * Checks (in order):
+ *  1. Exactly one operation
+ *  2. invokeHostFunction with invokeContract host function type
+ *  3. No per-operation source account OR it matches payerAddress
+ *  4. Transaction source == payerAddress
+ *  5. Contract ID == session.contractId
+ *  6. Method == "deposit"
+ *  7. arg[0] payer    == session.payerAddress
+ *  8. arg[1] merchant == session.merchantAddress
+ *  9. arg[2] amount   == BigInt(session.amount)  (exact)
+ * 10. arg[3] token    == session.tokenContractId
+ * 11. arg[4] order_id == session.orderId bytes   (exact 32-byte comparison)
+ * 12. arg[5] timeout  == session.requestedTimeoutLedgers (exact)
+ */
+function validateDepositArgs(
+  tx: import('stellar-sdk').Transaction,
+  session: EscrowCheckoutSession,
+  _networkPassphrase: string,
+): string | null {
+  if (tx.operations.length !== 1) {
+    return `Expected exactly 1 operation, got ${tx.operations.length}`;
+  }
+
+  const op = tx.operations[0]!;
+
+  // Check per-operation source if present
+  if ('source' in op && op.source && op.source !== session.payerAddress) {
+    return `Operation source ${String(op.source)} does not match payer ${session.payerAddress}`;
+  }
+
+  // Transaction-level source must be payer
+  if (tx.source !== session.payerAddress) {
+    return `Transaction source ${tx.source} does not match payer ${session.payerAddress}`;
+  }
+
+  const extracted = extractInvokeContract(op);
+  if ('error' in extracted) return extracted.error;
+  const { ic, contractAddress } = extracted;
+
+  if (contractAddress !== session.contractId) {
+    return `Contract address mismatch: expected ${session.contractId}, got ${contractAddress}`;
+  }
+
+  const methodName = ic.functionName().toString();
+  if (methodName !== 'deposit') {
+    return `Expected method "deposit", got "${methodName}"`;
+  }
+
+  // Decode and validate each argument positionally
+  const rawArgs = ic.args();
+  if (rawArgs.length !== 6) {
+    return `Expected 6 deposit arguments, got ${rawArgs.length}`;
+  }
+
+  // arg[0]: payer (Address → string)
+  const argPayer = decodeScVal(rawArgs[0]);
+  if (typeof argPayer !== 'string' || argPayer !== session.payerAddress) {
+    return `arg[0] payer mismatch: expected ${session.payerAddress}, got ${String(argPayer)}`;
+  }
+
+  // arg[1]: merchant (Address → string)
+  const argMerchant = decodeScVal(rawArgs[1]);
+  if (typeof argMerchant !== 'string' || argMerchant !== session.merchantAddress) {
+    return `arg[1] merchant mismatch: expected ${session.merchantAddress}, got ${String(argMerchant)}`;
+  }
+
+  // arg[2]: amount (i128 → bigint)
+  const argAmount = decodeScVal(rawArgs[2]);
+  if (typeof argAmount !== 'bigint' || argAmount !== BigInt(session.amount)) {
+    return `arg[2] amount mismatch: expected ${session.amount}, got ${String(argAmount)}`;
+  }
+
+  // arg[3]: token (Address → string)
+  const argToken = decodeScVal(rawArgs[3]);
+  if (typeof argToken !== 'string' || argToken !== session.tokenContractId) {
+    return `arg[3] token mismatch: expected ${session.tokenContractId}, got ${String(argToken)}`;
+  }
+
+  // arg[4]: order_id (bytes → Buffer-like)
+  const argOrderId = decodeScVal(rawArgs[4]);
+  const expectedBytes = Buffer.from(session.orderId, 'hex');
+  let actualBytes: Buffer;
+  if (Buffer.isBuffer(argOrderId)) {
+    actualBytes = argOrderId;
+  } else if (argOrderId && typeof argOrderId === 'object' && 'data' in argOrderId) {
+    actualBytes = Buffer.from((argOrderId as { data: number[] }).data);
+  } else {
+    return `arg[4] order_id has unexpected type: ${typeof argOrderId}`;
+  }
+  if (!actualBytes.equals(expectedBytes)) {
+    return `arg[4] order_id mismatch: expected ${session.orderId}, got ${actualBytes.toString('hex')}`;
+  }
+
+  // arg[5]: timeout_ledgers (u32 → number)
+  const argTimeout = decodeScVal(rawArgs[5]);
+  if (typeof argTimeout !== 'number' || argTimeout !== session.requestedTimeoutLedgers) {
+    return `arg[5] timeout_ledgers mismatch: expected ${session.requestedTimeoutLedgers}, got ${String(argTimeout)}`;
+  }
+
+  return null;
+}
+
+/**
+ * Validate a signed release transaction.
+ * method == "release", arg[0] == session.orderId, tx.source == session.merchantAddress
+ */
+function validateReleaseArgs(
+  tx: import('stellar-sdk').Transaction,
+  session: EscrowCheckoutSession,
+  _networkPassphrase: string,
+): string | null {
+  if (tx.operations.length !== 1) {
+    return `Expected exactly 1 operation, got ${tx.operations.length}`;
+  }
+
+  const op = tx.operations[0]!;
+
+  if (tx.source !== session.merchantAddress) {
+    return `Transaction source ${tx.source} does not match merchant ${session.merchantAddress}`;
+  }
+
+  const extracted = extractInvokeContract(op);
+  if ('error' in extracted) return extracted.error;
+  const { ic, contractAddress } = extracted;
+
+  if (contractAddress !== session.contractId) {
+    return `Contract address mismatch: expected ${session.contractId}, got ${contractAddress}`;
+  }
+
+  const methodName = ic.functionName().toString();
+  if (methodName !== 'release') {
+    return `Expected method "release", got "${methodName}"`;
+  }
+
+  const rawArgs = ic.args();
+  if (rawArgs.length !== 1) {
+    return `Expected 1 release argument, got ${rawArgs.length}`;
+  }
+
+  const argOrderId = decodeScVal(rawArgs[0]);
+  const expectedBytes = Buffer.from(session.orderId, 'hex');
+  let actualBytes: Buffer;
+  if (Buffer.isBuffer(argOrderId)) {
+    actualBytes = argOrderId;
+  } else if (argOrderId && typeof argOrderId === 'object' && 'data' in argOrderId) {
+    actualBytes = Buffer.from((argOrderId as { data: number[] }).data);
+  } else {
+    return `arg[0] order_id has unexpected type`;
+  }
+  if (!actualBytes.equals(expectedBytes)) {
+    return `arg[0] order_id mismatch: expected ${session.orderId}, got ${actualBytes.toString('hex')}`;
+  }
+
+  return null;
+}
+
+/**
+ * Validate a signed refund transaction.
+ * method == "refund", arg[0] == session.orderId, arg[1] == callerAddress,
+ * tx.source == callerAddress
+ */
+function validateRefundArgs(
+  tx: import('stellar-sdk').Transaction,
+  session: EscrowCheckoutSession,
+  callerAddress: string,
+  _networkPassphrase: string,
+): string | null {
+  if (tx.operations.length !== 1) {
+    return `Expected exactly 1 operation, got ${tx.operations.length}`;
+  }
+
+  const op = tx.operations[0]!;
+
+  if (tx.source !== callerAddress) {
+    return `Transaction source ${tx.source} does not match callerAddress ${callerAddress}`;
+  }
+
+  const extracted = extractInvokeContract(op);
+  if ('error' in extracted) return extracted.error;
+  const { ic, contractAddress } = extracted;
+
+  if (contractAddress !== session.contractId) {
+    return `Contract address mismatch: expected ${session.contractId}, got ${contractAddress}`;
+  }
+
+  const methodName = ic.functionName().toString();
+  if (methodName !== 'refund') {
+    return `Expected method "refund", got "${methodName}"`;
+  }
+
+  const rawArgs = ic.args();
+  if (rawArgs.length !== 2) {
+    return `Expected 2 refund arguments, got ${rawArgs.length}`;
+  }
+
+  const argOrderId = decodeScVal(rawArgs[0]);
+  const expectedBytes = Buffer.from(session.orderId, 'hex');
+  let actualBytes: Buffer;
+  if (Buffer.isBuffer(argOrderId)) {
+    actualBytes = argOrderId;
+  } else if (argOrderId && typeof argOrderId === 'object' && 'data' in argOrderId) {
+    actualBytes = Buffer.from((argOrderId as { data: number[] }).data);
+  } else {
+    return `arg[0] order_id has unexpected type`;
+  }
+  if (!actualBytes.equals(expectedBytes)) {
+    return `arg[0] order_id mismatch: expected ${session.orderId}, got ${actualBytes.toString('hex')}`;
+  }
+
+  const argCaller = decodeScVal(rawArgs[1]);
+  if (typeof argCaller !== 'string' || argCaller !== callerAddress) {
+    return `arg[1] caller mismatch: expected ${callerAddress}, got ${String(argCaller)}`;
+  }
+
+  return null;
+}
+
+/** Decode a raw ScVal to a native JS value using scValToNative. */
+function decodeScVal(raw: unknown): unknown {
+  try {
+    return scValToNative(raw as Parameters<typeof scValToNative>[0]);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Verify that an on-chain EscrowRecord matches the session's stored values.
+ * Returns a mismatch description string, or null if everything matches.
+ */
+function verifyOnChainRecord(
+  record: { payer: string; merchant: string; amount: bigint; token: string; status: string },
+  session: EscrowCheckoutSession,
+): string | null {
+  if (record.payer !== session.payerAddress) {
+    return `payer: on-chain ${record.payer} != session ${session.payerAddress}`;
+  }
+  if (record.merchant !== session.merchantAddress) {
+    return `merchant: on-chain ${record.merchant} != session ${session.merchantAddress}`;
+  }
+  if (record.amount !== BigInt(session.amount)) {
+    return `amount: on-chain ${record.amount} != session ${session.amount}`;
+  }
+  if (record.token !== session.tokenContractId) {
+    return `token: on-chain ${record.token} != session ${session.tokenContractId}`;
+  }
+  return null;
 }
 
 // ─── Factory for demo/server.ts usage ────────────────────────────────────────
 
-/**
- * Create an EscrowRouter from environment variables.
- * Used by packages/demo/src/server.ts.
- *
- * Returns null if ESCROW_CONTRACT_ID or SOROBAN_RPC_URL is not set — the
- * caller should still mount the router (it will return 503 on all routes).
- */
 export function createEscrowRouterFromEnv(network: StellarNetwork, releaseApiKey?: string): Router {
   const contractId = process.env['ESCROW_CONTRACT_ID'];
   const rpcUrl = process.env['SOROBAN_RPC_URL'] ?? SOROBAN_RPC_URLS[network];
 
   if (!contractId) {
-    console.warn(
-      '[escrow] ESCROW_CONTRACT_ID is not set. Escrow routes will return 503.',
-    );
+    console.warn('[escrow] ESCROW_CONTRACT_ID is not set. Escrow routes will return 503.');
   }
 
   return createEscrowRouter({
     contractId,
     network,
     releaseApiKey,
-    rpcClient: contractId
-      ? new HttpSorobanRpcClient(rpcUrl, network)
-      : undefined,
+    rpcClient: contractId ? new HttpSorobanRpcClient(rpcUrl, network) : undefined,
   });
 }
+
+// Export store for testing
+export { EscrowSessionStore };
