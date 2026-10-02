@@ -1,6 +1,6 @@
 # EMMY_CHANGELOG
  
-Single source of truth for every change made to this repo during the Wave Program audit.
+Single source of truth for every change made to this repo during the post-review improvements.
 Entries are append-only — never overwritten. Most recent entry at the top.
 ---
 
