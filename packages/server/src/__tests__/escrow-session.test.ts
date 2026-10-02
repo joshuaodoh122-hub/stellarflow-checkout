@@ -435,6 +435,7 @@ describe('EscrowCheckoutSession lifecycle — mock end-to-end', () => {
       merchantAddress: MERCHANT,
       tokenContractId: TOKEN,
       amount: DEPOSIT_AMOUNT.toString(),
+      requestedTimeoutLedgers: 0,
       network: 'testnet',
       status: 'pending',
       createdAt: new Date().toISOString(),
