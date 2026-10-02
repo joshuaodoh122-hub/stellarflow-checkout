@@ -52,7 +52,7 @@
  */
 
 import { Router, type Request, type Response } from 'express';
-import { TransactionBuilder, StrKey, xdr } from 'stellar-sdk';
+import { TransactionBuilder, StrKey, StrKey as StrKeyUtil } from 'stellar-sdk';
 import { NETWORK_PASSPHRASES } from '@stellarflow/core';
 import type { StellarNetwork } from '@stellarflow/core';
 import {
@@ -680,8 +680,6 @@ function validateDepositXdrOp(
     }
 
     // Convert the contract ID bytes to a Stellar contract address (C...)
-    // stellar-sdk's StrKey can encode contract IDs
-    const { StrKey: StrKeyUtil } = require('stellar-sdk') as typeof import('stellar-sdk');
     const contractAddress = StrKeyUtil.encodeContract(contractIdBytes);
     if (contractAddress !== expectedContractId) {
       return `Contract address mismatch: expected ${expectedContractId}, got ${contractAddress}`;
