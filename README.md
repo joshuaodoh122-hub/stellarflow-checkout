@@ -478,7 +478,7 @@ stellarflow-checkout/
 ├── ARCHITECTURE.md
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
-├── EMMY_CHANGELOG.md
+├── CHANGELOG.md
 ├── SECURITY.md
 └── LICENSE          # MIT
 ```
