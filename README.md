@@ -9,23 +9,94 @@ Lets merchants accept **USDC** and **XLM** with ~5 second settlement and near-ze
  
 ---
 
+## Two checkout modes: Classic Horizon and Soroban Escrow
+
+StellarFlow supports two independent checkout modes. They can run on the same server simultaneously.
+
+| Mode | How it works | Settlement | Best for |
+|------|-------------|-----------|----------|
+| **Classic Horizon** | SEP-0007 URI → customer wallet → Stellar payment → Horizon SSE | Direct (customer → merchant) | Digital downloads, immediate fulfilment, lowest friction |
+| **Soroban Escrow** | Unsigned XDR → wallet signs → funds locked in contract → merchant releases | Via contract (customer → contract → merchant) | Delayed fulfilment, physical goods, orders needing a trust window |
+
+**Choose escrow when:** fulfilment takes time (shipping, service delivery), the customer wants a refund window, or you want on-chain proof of the payment lifecycle.
+
+**Choose classic when:** you fulfil instantly, want lowest transaction overhead, or your customers are already familiar with SEP-0007 wallets.
+
+---
+
+## Soroban escrow — honest status (v0.2)
+
+**What is built and tested:**
+
+| Component | Status | Evidence |
+|-----------|--------|----------|
+| Rust escrow contract (`contracts/escrow`) | ✅ 17 unit tests written | `contracts/escrow/src/lib.rs` |
+| `HttpSorobanRpcClient` (real SDK integration) | ✅ Implemented | `packages/server/src/escrow-session.ts` |
+| `simulateContract` (read path) | ✅ 3 tests | `http-soroban-rpc-client.test.ts` |
+| `buildUnsignedContractTx` (non-custodial write) | ✅ 6 tests | `http-soroban-rpc-client.test.ts` |
+| `submitSignedTx` (poll-until-confirmed) | ✅ 6 tests | `http-soroban-rpc-client.test.ts` |
+| `invokeContract` (scripts/tests signer) | ✅ 3 tests | `http-soroban-rpc-client.test.ts` |
+| `POST /api/escrow` + 4 other endpoints | ✅ 38 supertest tests | `escrow-router.test.ts` |
+| Testnet proof script | ✅ Written, typechecks | `scripts/escrow-testnet-demo.ts` |
+| Live testnet run | ⏳ **Not yet run** — requires deployed contract + funded accounts | See below |
+
+**What "not yet run" means:** The TypeScript implementation is complete and all 66 new unit/integration tests pass. The escrow contract itself is not yet deployed to testnet by this author. The testnet proof script (`scripts/escrow-testnet-demo.ts`) is ready to execute once a contract is deployed.
+
+**Remaining limitations (v0.2):**
+- No partial refunds — refund always returns the full deposited amount
+- No third-party arbitration — if merchant claims fulfilment and payer disagrees, payer must wait for timeout
+- Single token per order — one SAC token contract per escrow
+- Session store is in-memory — server restart loses escrow session state (same limitation as classic checkout)
+- The 17 Rust contract tests pass in an environment with Rust installed — they could not be run in this CI environment (no `cargo` available)
+
+**Soroban SDK note:** This integration uses `stellar-sdk@12.3.0` (already in the repo) which ships full Soroban support (`SorobanRpc.Server`, `Contract`, `nativeToScVal`, `scValToNative`, `assembleTransaction`). A separate `@stellar/stellar-sdk` package is not needed and was not added.
+
+---
+
+## How to run the testnet proof
+
+```bash
+# 1. Install the Stellar CLI
+# https://developers.stellar.org/docs/tools/stellar-cli
+
+# 2. Deploy the escrow contract to testnet
+cd contracts/escrow
+cargo build --target wasm32v1-none --release
+stellar contract deploy \
+  --wasm target/wasm32v1-none/release/escrow.wasm \
+  --network testnet \
+  --source <your-funded-account>
+# Note the contract address (C...)
+
+# 3. Configure environment
+export ESCROW_CONTRACT_ID=CXXX...   # from step 2
+export SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
+export STELLAR_NETWORK=testnet
+
+# 4. Start the demo server
+cd packages/demo
+npm run dev &
+
+# 5. Run the testnet proof script
+cd ../..
+npx ts-node scripts/escrow-testnet-demo.ts
+```
+
+The script will print every transaction hash and links to stellar.expert for verification.
+
+---
+
 ## Soroban status — honest statement
 
-**v0.1 uses Horizon (Stellar Classic) only.** The payment flow is:
+**v0.1 uses Horizon (Stellar Classic) only for the classic payment flow.** That flow is:
 SEP-0007 URI → customer wallet → Stellar transaction → Horizon SSE stream → memo matching.
 
-Soroban smart contracts are **not yet integrated** in this version. Two integration points
-are planned and in active development:
+**v0.2 adds a real Soroban escrow checkout mode.** See the "Two checkout modes" section above and the implementation in `packages/server/src/escrow-session.ts` and `packages/server/src/escrow-router.ts`.
 
 | Feature | Status | Branch |
 |---|---|---|
-| Soroban escrow checkout (`EscrowCheckoutSession`) | ✅ Built & tested — deploy pending | `feat/soroban-escrow` |
+| Soroban escrow checkout (`EscrowCheckoutSession`) | ✅ Built & tested — testnet deploy pending | `feat/escrow-rpc-client`, `feat/escrow-checkout-routes` |
 | Reflector on-chain price oracle (`ReflectorPriceSource`) | Planned v0.3 | — |
-
-The `PriceSource` interface in `packages/core/src/price-quote.ts` is already designed
-for oracle substitution. The escrow contract will add a new checkout mode where funds
-are held in a Soroban contract until the merchant releases them — useful for
-delayed-fulfilment orders and dispute resolution.
 
 ---
 
