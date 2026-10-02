@@ -141,3 +141,60 @@ The StellarFlow server does not hold or have signing authority over escrow funds
 All contract invocations are signed by the caller's wallet (payer or merchant).
 The server constructs unsigned transactions and coordinates the flow — it never
 sees a private key.
+
+---
+
+## Soroban escrow threat model (v0.2)
+
+### XDR substitution
+
+**Threat:** An attacker intercepts the unsigned deposit XDR and replaces it with a transaction targeting a different contract, a different method (e.g. `release` instead of `deposit`), or a different beneficiary, then submits the replaced XDR via `POST /api/escrow/:id/submit`.
+
+**Mitigation:** The submit endpoint validates the parsed XDR before forwarding:
+1. Must be a `Transaction` (not `FeeBump`)
+2. Must contain exactly one `invokeHostFunction` operation
+3. Invoked contract ID must match `session.contractId` (ESCROW_CONTRACT_ID)
+4. Invoked method must be `"deposit"`
+5. Transaction source account must match `session.payerAddress`
+
+Failure on any check returns 400 and the XDR is discarded — nothing is sent to the network.
+
+### Replay of a submitted deposit
+
+**Threat:** An attacker replays a previously submitted signed deposit XDR to create a duplicate on-chain deposit for the same `order_id`.
+
+**Mitigation (contract layer):** The escrow contract rejects any `deposit()` call for an `order_id` that already exists in persistent storage (`EscrowError::AlreadyExists` code 1). The contract is the canonical guard — the server cannot be bypassed.
+
+**Mitigation (server layer):** The session's status transitions from `pending` to a temporary lock before submission. A second concurrent submit attempt sees a non-`pending` status and is rejected with 409 before even reaching the XDR validation.
+
+### Merchant key handling
+
+**Non-custodial invariant:** The StellarFlow server never holds or requests the merchant's private key on the normal HTTP request path.
+
+- `POST /api/escrow/:id/release` returns an unsigned release XDR for the merchant to sign in their own wallet.
+- The server only calls `buildUnsignedContractTx` (simulates + assembles footprint) — no signing authority.
+- The `invokeContract` method (which accepts a signer callback) is explicitly documented as scripts/tests-only and must never be called from an HTTP handler.
+
+**Threat:** If a merchant's private key is compromised, an attacker can call `release()` and drain the escrow to the merchant's address — but not to any other address. The contract enforces `record.merchant.require_auth()`.
+
+### Timeout semantics and payer protection
+
+**What the timeout protects against:** If a merchant never calls `release()` and never calls `refund()`, the payer's funds would be locked forever without the timeout mechanism.
+
+**How it works:** The `timeout_ledgers` parameter (default: 518,400 ledgers ≈ 30 days at ~5s/ledger) is stored on-chain at deposit time. After `deposited_at + timeout_ledgers` ledgers have passed, the payer may call `refund()` unilaterally. Before that ledger, `EscrowError::TimeoutNotElapsed` is returned.
+
+**Risks to communicate to users:**
+- The timeout is measured in ledger sequence numbers, not wall clock time. Actual elapsed time may differ slightly from the ledger estimate.
+- The payer cannot get funds back before the timeout without the merchant's co-operation.
+- There is no arbiter or dispute resolution in v0.2 — if fulfilment is disputed, the payer must wait for the timeout.
+
+### Session store persistence
+
+The escrow session store is in-memory. A server restart loses all session state. If a deposit was submitted successfully but the server restarts before the session is updated to `deposited`, the on-chain funds are still safe (held by the contract), but the server will lose knowledge of the session. The `GET /api/escrow/:id` endpoint reconciles with on-chain state, but only if the session object still exists in memory.
+
+**Mitigation for production:** Replace the in-memory store with a persistent store (SQLite, Postgres) — the same recommendation applies to the classic `SessionStore`.
+
+### Rate limiting
+
+The `/api/escrow` routes are subject to the same rate limiter configured in `packages/demo/src/server.ts` (60 req/min per IP). For production, consider separate, more aggressive limits on the write endpoints (`/submit`, `/release`, `/refund`).
+
