@@ -424,3 +424,197 @@ These are explicitly out of scope for v1 but should be tracked as GitHub issues:
 | Dashboard UI | Merchant review queue for flagged payments |
 | Stuck-session expiry | Transition `submitting` sessions to `expired` after `expiresAt` (see Known gaps above) |
 | Background sweep | Periodic sweep to resolve stuck `submitting` sessions without a query trigger (see Known gaps above) |
+
+---
+
+## Soroban escrow data flow (v0.2)
+
+### Overview
+
+The escrow checkout mode adds a parallel flow to the classic Horizon payment.
+Funds flow through a Soroban smart contract rather than directly to the merchant.
+
+```
+Customer Browser / Wallet                 StellarFlow Server              Soroban RPC / Chain
+        │                                        │                               │
+        │ 1. POST /api/escrow                    │                               │
+        │   { payerAddress, merchantAddress,     │                               │
+        │     tokenContractId, amount }          │                               │
+        │───────────────────────────────────────▶│                               │
+        │                                        │ buildUnsignedContractTx       │
+        │                                        │──────────────────────────────▶│
+        │                                        │◀── unsignedXdr ───────────────│
+        │◀── { orderId, unsignedDepositXdr } ────│                               │
+        │                                        │                               │
+        │ 2. Wallet signs XDR locally            │                               │
+        │    (no key sent to server)             │                               │
+        │                                        │                               │
+        │ 3. POST /api/escrow/:id/submit         │                               │
+        │   { signedDepositXdr }                 │                               │
+        │───────────────────────────────────────▶│ validate XDR                  │
+        │                                        │ submitSignedTx ───────────────▶
+        │                                        │ poll until SUCCESS/FAILED ────▶
+        │◀── { txHash, status: 'deposited' } ────│                               │
+        │                                        │                               │
+        │ 4. GET /api/escrow/:id (optional poll) │                               │
+        │───────────────────────────────────────▶│ simulateContract(get_escrow)  │
+        │                                        │──────────────────────────────▶│
+        │◀── { status, onChain: { Held, ... } }──│◀── EscrowRecord ──────────────│
+        │                                        │                               │
+        │ 5. Merchant: POST /api/escrow/:id/release                              │
+        │   { merchantAddress }                  │                               │
+        │───────────────────────────────────────▶│ buildUnsignedContractTx       │
+        │                                        │──────────────────────────────▶│
+        │◀── { unsignedReleaseXdr } ─────────────│◀── unsignedXdr ───────────────│
+        │                                        │                               │
+        │ 6. Merchant signs + submits XDR        │                               │
+        │    (via wallet or directly)            │ submitSignedTx ───────────────▶
+        │                                        │                               │ funds → merchant
+```
+
+### Non-custodial split
+
+The write path is deliberately split in two to preserve the non-custodial invariant:
+
+| Step | Who holds the key | What happens |
+|------|------------------|-------------|
+| `buildUnsignedContractTx` | Nobody — no key needed | Server loads account, simulates, assembles footprint, returns unsigned XDR |
+| Wallet signs | Wallet (Freighter, Albedo, etc.) | User approves in their wallet; server never sees key |
+| `submitSignedTx` | Nobody — no key needed | Server validates XDR, submits to chain, polls for result |
+
+`invokeContract` (which combines all three with an injected signer callback) exists only for scripts and tests. It must never be called from an HTTP request handler.
+
+### XDR validation (submit endpoint)
+
+Before forwarding a signed deposit XDR to the chain, the server verifies:
+1. XDR parses as a `Transaction` (not `FeeBump`)
+2. Exactly one `invokeHostFunction` operation
+3. Invoked contract ID == `session.contractId` (ESCROW_CONTRACT_ID)
+4. Invoked method == `"deposit"`
+5. Transaction source == `session.payerAddress`
+
+This prevents an attacker from substituting a signed XDR for a different contract, method, or beneficiary.
+
+### Session status lifecycle
+
+```
+pending ──(submit succeeds)──▶ deposited ──(release)──▶ fulfilled
+   │                              │
+   └──(submit fails)──▶ failed    └──(refund)──▶ refunded
+```
+
+The session status is the server's view. The on-chain status (from `get_escrow`) is the canonical source. `GET /api/escrow/:id` reconciles them — if they disagree, the on-chain status wins and the session is updated.
+
+### 503 guard
+
+If `ESCROW_CONTRACT_ID` is not set in the environment, all escrow endpoints return `503 "escrow not configured"`. The server never crashes on missing config, and the classic Horizon flow is unaffected.
+
+### Escrow contract error codes
+
+Contract errors (codes 1–7) are detected during simulation and surface as `EscrowClientError`:
+
+| Code | Name | HTTP |
+|------|------|------|
+| 1 | AlreadyExists | 409 |
+| 2 | NotFound | 404 |
+| 3 | AlreadyReleased | 409 |
+| 4 | AlreadyRefunded | 409 |
+| 5 | NotMerchant | 403 |
+| 6 | NotAuthorized | 403 |
+| 7 | TimeoutNotElapsed | 409 |
+
+RPC-layer errors (`EscrowRpcError`) are distinct and map to 400/502/504 depending on kind.
+
+---
+
+
+---
+
+## Soroban escrow data flow (v0.2)
+
+### Overview
+
+The escrow checkout mode adds a parallel flow to the classic Horizon payment.
+Funds flow through a Soroban smart contract rather than directly to the merchant.
+
+```
+Customer Browser / Wallet           StellarFlow Server          Soroban RPC / Chain
+        │                                   │                           │
+        │ 1. POST /api/escrow               │                           │
+        │   { payer, merchant, token, amt } │                           │
+        │──────────────────────────────────▶│                           │
+        │                                   │ buildUnsignedContractTx   │
+        │                                   │──────────────────────────▶│
+        │                                   │◀── unsignedXdr ───────────│
+        │◀── { orderId, unsignedDepositXdr }│                           │
+        │                                   │                           │
+        │ 2. Wallet signs XDR locally       │                           │
+        │    (no key sent to server)        │                           │
+        │                                   │                           │
+        │ 3. POST /api/escrow/:id/submit    │                           │
+        │   { signedDepositXdr }            │                           │
+        │──────────────────────────────────▶│ validate XDR              │
+        │                                   │ submitSignedTx ───────────▶
+        │                                   │ poll getTransaction ──────▶
+        │◀── { txHash, status:deposited } ──│                           │
+        │                                   │                           │
+        │ 4. GET /api/escrow/:id            │                           │
+        │──────────────────────────────────▶│ simulateContract          │
+        │                                   │──────────────────────────▶│
+        │◀── { status, onChain:{Held,...} } │◀── EscrowRecord ──────────│
+        │                                   │                           │
+        │ 5. POST /api/escrow/:id/release   │                           │
+        │   { merchantAddress }             │                           │
+        │──────────────────────────────────▶│ buildUnsignedContractTx   │
+        │                                   │──────────────────────────▶│
+        │◀── { unsignedReleaseXdr } ────────│◀── unsignedXdr ───────────│
+        │                                   │                           │
+        │ 6. Merchant signs + submits       │                           │
+        │    (wallet or direct RPC call)    │                   funds → merchant
+```
+
+### Non-custodial split
+
+The write path is deliberately split to preserve the non-custodial invariant:
+
+| Step | Who holds the key | What happens |
+|------|------------------|-------------|
+| `buildUnsignedContractTx` | Nobody — no key needed | Server loads account, simulates, assembles footprint, returns unsigned XDR |
+| Wallet signs | Wallet (Freighter, Albedo, etc.) | User approves in their wallet; server never sees the key |
+| `submitSignedTx` | Nobody — no key needed | Server validates XDR, submits to chain, polls for result |
+
+`invokeContract` (which combines all three with an injected signer callback) exists only for scripts and tests. It is documented with a warning and must never be called from an HTTP request handler.
+
+### XDR validation (submit endpoint)
+
+Before forwarding a signed deposit XDR to the chain, the server verifies:
+1. XDR parses as a `Transaction` (not `FeeBump`)
+2. Exactly one `invokeHostFunction` operation
+3. Invoked contract ID == `session.contractId` (ESCROW_CONTRACT_ID)
+4. Invoked method == `"deposit"`
+5. Transaction source == `session.payerAddress`
+
+This prevents XDR substitution: an attacker cannot swap in a signed XDR targeting a different contract, method, or beneficiary.
+
+### Session status lifecycle
+
+```
+pending ──(submit succeeds)──▶ deposited ──(release tx)──▶ fulfilled
+   │                               │
+   └──(submit fails)──▶ failed     └──(refund tx)──▶ refunded
+```
+
+The session status is the server's view. The on-chain status (from `get_escrow`) is canonical. `GET /api/escrow/:id` reconciles them — if they disagree, on-chain wins.
+
+### Contract error mapping
+
+| Code | Contract name | HTTP status |
+|------|---------------|-------------|
+| 1 | AlreadyExists | 409 |
+| 2 | NotFound | 404 |
+| 3 | AlreadyReleased | 409 |
+| 4 | AlreadyRefunded | 409 |
+| 5 | NotMerchant | 403 |
+| 6 | NotAuthorized | 403 |
+| 7 | TimeoutNotElapsed | 409 |
+
