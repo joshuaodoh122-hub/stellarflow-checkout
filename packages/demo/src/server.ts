@@ -31,6 +31,7 @@ import {
   SessionManager,
   PaymentProcessor,
   createCheckoutRouter,
+  createEscrowRouterFromEnv,
 } from '@stellarflow/server';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -131,7 +132,7 @@ app.use('/api', apiLimiter);
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
 
-// API routes
+// API routes — classic Horizon checkout
 const checkoutRouter = createCheckoutRouter({
   sessionManager,
   quoteService,
@@ -142,6 +143,11 @@ const checkoutRouter = createCheckoutRouter({
 });
 
 app.use('/api', checkoutRouter);
+
+// API routes — Soroban escrow checkout (requires ESCROW_CONTRACT_ID env var)
+// If not configured, all /api/escrow routes return 503 with a clear message.
+const escrowRouter = createEscrowRouterFromEnv(NETWORK, SESSIONS_API_KEY);
+app.use('/api', escrowRouter);
 
 // Health check
 app.get('/health', (_req, res) => {
