@@ -9,7 +9,7 @@
 ## Reporting a vulnerability
 
 **Please do not open a public GitHub issue for security vulnerabilities.**
-
+ 
 Report vulnerabilities by emailing the maintainer or opening a [GitHub Security Advisory](https://github.com/joshuaodoh122-hub/stellarflow-checkout/security/advisories/new).
 
 Include:
