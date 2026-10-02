@@ -2,7 +2,7 @@
 
 Open-source, non-custodial payment widget for the [Stellar network](https://stellar.org).
 Lets merchants accept **USDC** and **XLM** with ~5 second settlement and near-zero fees — without the 2–3%+ taken by traditional processors.
-
+ 
 [![CI](https://github.com/joshuaodoh122-hub/stellarflow-checkout/actions/workflows/ci.yml/badge.svg)](https://github.com/joshuaodoh122-hub/stellarflow-checkout/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Stellar: Testnet](https://img.shields.io/badge/Stellar-Testnet-blue)](https://developers.stellar.org/docs/fundamentals-and-concepts/testnet-and-pubnet)
