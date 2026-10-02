@@ -35,12 +35,6 @@
  * `SorobanRpc.Server`, `Contract`, `nativeToScVal`, `scValToNative`,
  * `assembleTransaction`. The legacy classic-payment code elsewhere in the
  * server also uses `stellar-sdk@12.x` — they coexist from the same package.
- *
- * If a future migration to `@stellar/stellar-sdk@>=13` is desired, the change
- * is isolated to this file and the HTTP escrow routes (escrow-router.ts).
- * The classic Horizon flow (checkout-router.ts, tx-builder.ts, core/*) does
- * not need to change at the same time. A breaking import path change between
- * the two SDK generations is the main migration cost.
  */
 
 import {
@@ -91,27 +85,32 @@ export interface EscrowRecord {
  * Session lifecycle status for an EscrowCheckoutSession.
  *
  * - `pending`    — session created, deposit not yet confirmed on-chain
- * - `deposited`  — funds confirmed held in the escrow contract
+ * - `deposited`  — funds confirmed held in the escrow contract;
+ *                  on-chain record matches session payer/merchant/amount/token
  * - `fulfilled`  — merchant called release(); funds transferred to merchant
  * - `refunded`   — funds returned to payer (merchant voluntary or payer timeout)
  * - `failed`     — deposit transaction failed or timed out without confirmation
+ * - `mismatch`   — deposit confirmed on-chain but the on-chain payer/merchant/
+ *                  amount/token does not match what this session recorded.
+ *                  This is a terminal error state requiring manual investigation.
+ *                  The session will NOT be marked 'deposited'. Funds are on-chain
+ *                  but may belong to a different escrow record.
  */
 export type EscrowSessionStatus =
   | 'pending'
   | 'deposited'
   | 'fulfilled'
   | 'refunded'
-  | 'failed';
+  | 'failed'
+  | 'mismatch';
 
 /**
  * An escrow-based checkout session.
- *
- * Named `EscrowCheckoutSession` to match the README reference.
  */
 export interface EscrowCheckoutSession {
-  /** Server-assigned session ID (maps to the on-chain order_id) */
+  /** Server-assigned session ID (human-facing counter) */
   sessionId: string;
-  /** 32-byte order identifier as a hex string (64 hex chars) */
+  /** 32 random bytes as a 64-character hex string (on-chain order_id key) */
   orderId: string;
   /** Payer's Stellar address */
   payerAddress: string;
@@ -121,6 +120,8 @@ export interface EscrowCheckoutSession {
   tokenContractId: string;
   /** Amount in token's smallest unit (as bigint string) */
   amount: string;
+  /** The timeout_ledgers value requested at session creation (0 = contract default) */
+  requestedTimeoutLedgers: number;
   /** Network this session is on */
   network: StellarNetwork;
   /** Current session lifecycle status */
@@ -158,15 +159,12 @@ export interface SorobanRpcClient {
    * transaction and must return a signed XDR. This callback must NEVER
    * be driven by a private key stored on the server in production.
    * Use only in scripts and tests where the key is explicitly injected.
-   *
-   * @returns The transaction hash on success.
    */
   invokeContract(params: {
     contractId: string;
     method: string;
     args: unknown[];
     signerAddress: string;
-    /** Signer callback — must return signed XDR. Never use in HTTP handlers. */
     signer: (unsignedXdr: string) => Promise<string>;
   }): Promise<{ txHash: string; status: 'success' | 'failed'; errorCode?: number }>;
 
@@ -174,6 +172,9 @@ export interface SorobanRpcClient {
    * Simulate a read-only contract call (no auth needed).
    * Returns the decoded return value.
    * Used by getEscrow() — free, no fee, no signature.
+   *
+   * Contract errors (codes 1–7) detected in the simulation error string are
+   * mapped to EscrowClientError so callers can handle them specifically.
    */
   simulateContract(params: {
     contractId: string;
@@ -183,14 +184,6 @@ export interface SorobanRpcClient {
 
   /**
    * Build an unsigned transaction XDR for a contract call.
-   *
-   * Steps:
-   *  1. Load the caller's account sequence number from the RPC.
-   *  2. Build a transaction with the contract invocation operation.
-   *  3. Simulate it to get the fee and storage footprint.
-   *  4. Assemble footprint + resource fee into the transaction.
-   *  5. Return the unsigned XDR for the wallet to sign.
-   *
    * No private key is needed. The wallet signs the returned XDR.
    */
   buildUnsignedContractTx(params: {
@@ -202,16 +195,9 @@ export interface SorobanRpcClient {
 
   /**
    * Validate and submit a wallet-signed transaction XDR.
-   *
-   * Steps:
-   *  1. Parse the XDR and verify it contains exactly one invokeHostFunction op.
-   *  2. Submit via rpc.sendTransaction.
-   *  3. Poll rpc.getTransaction until SUCCESS or FAILED (bounded timeout).
-   *  4. Map FAILED status or polling timeout to a distinct EscrowRpcError.
-   *  5. Return the transaction hash on SUCCESS.
-   *
+   * Returns the transaction hash on SUCCESS.
    * Does NOT check which contract/method/args — that is the caller's
-   * responsibility (see escrow-router.ts for XDR validation).
+   * responsibility (escrow-router.ts validates the XDR before calling this).
    */
   submitSignedTx(params: {
     signedXdr: string;
@@ -258,21 +244,28 @@ const POLL_INTERVAL_MS = 1_500;
  *
  * ## Non-custodial design
  *
- * The HTTP escrow routes (escrow-router.ts) call:
+ * HTTP escrow routes call:
  *   - buildUnsignedContractTx → returns XDR; no key involved
  *   - submitSignedTx          → accepts wallet-signed XDR; no key involved
  *
- * The convenience method invokeContract combines those steps with a signer
- * callback. It is used only in scripts/tests — NEVER in HTTP request handlers.
+ * invokeContract combines those with a signer callback.
+ * It is used only in scripts/tests — NEVER in HTTP request handlers.
  *
  * ## Error mapping
  *
- * - Simulation failures        → EscrowRpcError(SIMULATION_FAILED)
- * - sendTransaction rejection  → EscrowRpcError(SEND_FAILED)
- * - tx hash FAILED status      → EscrowRpcError(TX_FAILED) with errorCode
- * - poll timeout               → EscrowRpcError(POLL_TIMEOUT)
- * - XDR parse failure          → EscrowRpcError(INVALID_XDR)
- * - Contract error (code 1–7)  → EscrowClientError via EscrowClient layer
+ * - Simulation failures             → EscrowRpcError(SIMULATION_FAILED)
+ * - Simulation with contract error  → EscrowClientError(code) — caller can catch
+ * - sendTransaction rejection       → EscrowRpcError(SEND_FAILED)
+ * - tx hash FAILED status           → EscrowRpcError(TX_FAILED)
+ * - poll timeout                    → EscrowRpcError(POLL_TIMEOUT)
+ * - XDR parse failure               → EscrowRpcError(INVALID_XDR)
+ * - Contract error code in XDR      → NOT extracted from tx result (see note below)
+ *
+ * NOTE on TX_FAILED error codes: Stellar SDK does not expose a simple API to extract
+ * Soroban contract error codes from a failed transaction's result meta XDR.
+ * TX_FAILED returns errorCode undefined. The contract error is detectable from
+ * simulation (buildUnsignedContractTx path) but not from a submitted tx result.
+ * This is a known limitation documented here and in ARCHITECTURE.md.
  */
 export class HttpSorobanRpcClient implements SorobanRpcClient {
   private readonly rpc: SorobanRpc.Server;
@@ -293,8 +286,9 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
    * Simulate a read-only contract call (no auth, no fee).
    * Used for get_escrow reads.
    *
-   * Builds a minimal unsigned tx, calls simulateTransaction, decodes the
-   * ScVal result with scValToNative, and returns the decoded value.
+   * Contract errors (codes 1–7) found in the simulation error are surfaced
+   * as EscrowClientError so callers (e.g. GET /api/escrow/:id) can handle
+   * NotFound specifically rather than treating all failures the same.
    */
   async simulateContract(params: {
     contractId: string;
@@ -303,21 +297,11 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
   }): Promise<{ result: unknown }> {
     const { contractId, method, args } = params;
 
-    // We need a source account to build the tx even for simulation.
-    // Use a zero-sequence placeholder — simulation doesn't submit.
-    let sourceAccount: Account;
-    try {
-      // For pure read simulations we use a well-known placeholder account.
-      // The simulation only needs a valid strkey — it never submits.
-      // GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5 is the
-      // StellarFlow demo merchant address used in tests — a valid Ed25519 key.
-      sourceAccount = new Account(
-        'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
-        '0',
-      );
-    } catch (e) {
-      throw new EscrowRpcError('NETWORK_ERROR', `Failed to construct placeholder account: ${String(e)}`);
-    }
+    // Use a well-known valid placeholder for simulation — sequence 0, never submitted
+    const sourceAccount = new Account(
+      'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
+      '0',
+    );
 
     const contract = new Contract(contractId);
     const scArgs = this._encodeArgs(args);
@@ -339,6 +323,11 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
     }
 
     if (SorobanRpc.Api.isSimulationError(simResult)) {
+      // Map contract error codes so callers can distinguish NotFound from other errors
+      const errorCode = this._extractContractErrorCode(simResult.error);
+      if (errorCode !== null) {
+        throw new EscrowClientError(method, errorCode);
+      }
       throw new EscrowRpcError('SIMULATION_FAILED', simResult.error);
     }
 
@@ -346,7 +335,6 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
       throw new EscrowRpcError('SIMULATION_FAILED', 'Simulation returned unexpected response type');
     }
 
-    // The result is the first return value of the contract function
     const rawResult = simResult.result?.retval;
     if (!rawResult) {
       throw new EscrowRpcError('SIMULATION_FAILED', 'No result returned from simulation');
@@ -360,9 +348,7 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
 
   /**
    * Simulate + assemble a contract invocation and return unsigned XDR.
-   *
-   * The caller's wallet signs this and returns it to submitSignedTx.
-   * No private key is needed here — the non-custodial invariant is intact.
+   * No private key needed.
    */
   async buildUnsignedContractTx(params: {
     contractId: string;
@@ -372,7 +358,6 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
   }): Promise<{ unsignedXdr: string; networkPassphrase: string }> {
     const { contractId, method, args, callerAddress } = params;
 
-    // Load actual account sequence from the RPC
     let sourceAccount: Account;
     try {
       sourceAccount = await this.rpc.getAccount(callerAddress);
@@ -392,10 +377,9 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
       networkPassphrase: this.networkPassphrase,
     })
       .addOperation(operation)
-      .setTimeout(300) // 5-minute signing window
+      .setTimeout(300)
       .build();
 
-    // Simulate to get the storage footprint and resource fee
     let simResult: SorobanRpc.Api.SimulateTransactionResponse;
     try {
       simResult = await this.rpc.simulateTransaction(tx);
@@ -404,7 +388,6 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
     }
 
     if (SorobanRpc.Api.isSimulationError(simResult)) {
-      // Map simulation errors to EscrowClientError if they contain a contract error code
       const errorCode = this._extractContractErrorCode(simResult.error);
       if (errorCode !== null) {
         throw new EscrowClientError(method, errorCode);
@@ -416,7 +399,6 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
       throw new EscrowRpcError('SIMULATION_FAILED', 'Unexpected simulation response');
     }
 
-    // Assemble: inject footprint and resource fee into the transaction
     const assembled = SorobanRpc.assembleTransaction(tx, simResult).build();
 
     return {
@@ -428,13 +410,12 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
   // ─── submitSignedTx (write path, step 3) ──────────────────────────────
 
   /**
-   * Submit a wallet-signed XDR to the Soroban RPC and poll for result.
+   * Submit a wallet-signed XDR and poll for result.
    *
-   * Polling behaviour:
-   * - Polls every POLL_INTERVAL_MS (1.5 s)
-   * - Gives up after POLL_TIMEOUT_MS (30 s) → EscrowRpcError(POLL_TIMEOUT)
-   * - FAILED status → EscrowRpcError(TX_FAILED) with extracted error code
-   * - SUCCESS → returns { txHash }
+   * NOTE: TX_FAILED does not include a contract error code. The Stellar SDK
+   * does not provide a simple path to extract Soroban error codes from the
+   * result meta XDR of a submitted transaction. errorCode is always undefined
+   * for TX_FAILED results.
    */
   async submitSignedTx(params: {
     signedXdr: string;
@@ -442,7 +423,6 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
   }): Promise<{ txHash: string }> {
     const { signedXdr, networkPassphrase } = params;
 
-    // Parse and validate XDR
     let tx: Transaction;
     try {
       const parsed = TransactionBuilder.fromXDR(signedXdr, networkPassphrase);
@@ -455,7 +435,6 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
       throw new EscrowRpcError('INVALID_XDR', `XDR parse error: ${String(e)}`);
     }
 
-    // Submit
     let sendResult: SorobanRpc.Api.SendTransactionResponse;
     try {
       sendResult = await this.rpc.sendTransaction(tx);
@@ -472,7 +451,6 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
 
     const txHash = sendResult.hash;
 
-    // Poll until confirmed
     const deadline = Date.now() + POLL_TIMEOUT_MS;
     while (Date.now() < deadline) {
       await new Promise<void>((r) => setTimeout(r, POLL_INTERVAL_MS));
@@ -480,8 +458,7 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
       let pollResult: SorobanRpc.Api.GetTransactionResponse;
       try {
         pollResult = await this.rpc.getTransaction(txHash);
-      } catch (e) {
-        // Transient network error during polling — keep trying
+      } catch {
         continue;
       }
 
@@ -492,14 +469,10 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
       }
 
       if (status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-        // Extract contract error code if present
-        const errorCode = this._extractContractErrorCodeFromTx(pollResult);
-        throw new EscrowRpcError(
-          'TX_FAILED',
-          `Transaction failed${errorCode !== null ? ` with contract error code ${errorCode}` : ''}`,
-        );
+        // Contract error code extraction from tx result XDR is not implemented.
+        // See module docblock note on TX_FAILED.
+        throw new EscrowRpcError('TX_FAILED', `Transaction ${txHash} failed on-chain`);
       }
-
       // NOT_FOUND = still pending, keep polling
     }
 
@@ -512,16 +485,9 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
   // ─── invokeContract (scripts/tests only — NOT for HTTP handlers) ──────
 
   /**
-   * Convenience method that combines buildUnsignedContractTx + signer + submitSignedTx.
+   * Convenience wrapper: buildUnsignedContractTx + signer + submitSignedTx.
    *
-   * ⚠️  NON-CUSTODIAL WARNING:
-   * The signer callback has access to a private key. This method must NEVER
-   * be called from an HTTP request handler. It exists only for:
-   *   - scripts/escrow-testnet-demo.ts (funded testnet keypair)
-   *   - unit/integration tests (mock signer)
-   *
-   * Contract errors (codes 1–7) returned via TX_FAILED are mapped to
-   * EscrowClientError so the EscrowClient layer can catch them uniformly.
+   * ⚠️  NON-CUSTODIAL WARNING: Must never be called from HTTP request handlers.
    */
   async invokeContract(params: {
     contractId: string;
@@ -537,15 +503,11 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
 
     try {
       const built = await this.buildUnsignedContractTx({
-        contractId,
-        method,
-        args,
-        callerAddress: signerAddress,
+        contractId, method, args, callerAddress: signerAddress,
       });
       unsignedXdr = built.unsignedXdr;
       networkPassphrase = built.networkPassphrase;
     } catch (e) {
-      // Simulation-detected contract errors surface here
       if (e instanceof EscrowClientError) {
         return { txHash: '', status: 'failed', errorCode: e.code };
       }
@@ -564,10 +526,7 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
       return { txHash: result.txHash, status: 'success' };
     } catch (e) {
       if (e instanceof EscrowRpcError && e.kind === 'TX_FAILED') {
-        // Extract error code from the error message
-        const match = e.detail?.match(/error code (\d+)/);
-        const errorCode = match ? parseInt(match[1]!, 10) : 0;
-        return { txHash: '', status: 'failed', errorCode };
+        return { txHash: '', status: 'failed', errorCode: undefined };
       }
       throw e;
     }
@@ -597,25 +556,20 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
       return nativeToScVal(arg, { type: 'u32' });
     }
     if (typeof arg === 'string') {
-      // Stellar public key (G...) or contract ID (C...) → Address
       if (arg.startsWith('G') || arg.startsWith('C')) {
         return nativeToScVal(arg, { type: 'address' });
       }
-      // 64-char hex string → BytesN<32>
       if (/^[0-9a-fA-F]{64}$/.test(arg)) {
         return nativeToScVal(Buffer.from(arg, 'hex'), { type: 'bytes' });
       }
     }
-    // Fallback: let nativeToScVal infer the type
     return nativeToScVal(arg as string | number | bigint | boolean | null | undefined);
   }
 
   /**
    * Decode an EscrowRecord from a scValToNative result.
-   * The Soroban SDK decodes struct fields as a Map<string, unknown>.
    */
   private _decodeEscrowRecord(decoded: unknown): EscrowRecord {
-    // scValToNative decodes a contracttype struct as a plain object (Map)
     if (typeof decoded !== 'object' || decoded === null) {
       throw new EscrowRpcError(
         'SIMULATION_FAILED',
@@ -625,8 +579,6 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
 
     const rec = decoded as Record<string, unknown>;
 
-    // Status enum: Soroban SDK decodes enum variants as { tag: 'Held'|... }
-    // or plain string depending on the SDK version
     let status: EscrowStatus;
     const rawStatus = rec['status'];
     if (typeof rawStatus === 'string' && (rawStatus === 'Held' || rawStatus === 'Released' || rawStatus === 'Refunded')) {
@@ -642,15 +594,10 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
       throw new EscrowRpcError('SIMULATION_FAILED', `Cannot decode escrow status: ${JSON.stringify(rawStatus)}`);
     }
 
-    // Addresses: Soroban SDK decodes Address as a string (public key or contract ID)
     const payer = this._assertString(rec['payer'], 'payer');
     const merchant = this._assertString(rec['merchant'], 'merchant');
     const token = this._assertString(rec['token'], 'token');
-
-    // amount: i128 decoded as bigint
     const amount = BigInt(rec['amount'] as bigint | number | string);
-
-    // deposited_at, timeout_ledgers: u32 decoded as number
     const deposited_at = Number(rec['deposited_at']);
     const timeout_ledgers = Number(rec['timeout_ledgers']);
 
@@ -666,13 +613,11 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
 
   /**
    * Attempt to extract a contract error code (1–7) from a simulation error string.
-   * Returns null if no error code can be identified.
+   * Returns null if no code can be identified.
    *
-   * Soroban simulation error strings typically contain "Error(Contract, #N)"
-   * where N is the EscrowError variant code.
+   * Soroban simulation errors typically contain "Error(Contract, #N)".
    */
   private _extractContractErrorCode(errorStr: string): number | null {
-    // Pattern: "Error(Contract, #1)" or "contract error: 1" etc.
     const patterns = [
       /Error\(Contract,\s*#(\d+)\)/,
       /contract error[:\s]+(\d+)/i,
@@ -687,59 +632,16 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
     }
     return null;
   }
-
-  /**
-   * Attempt to extract a contract error code from a failed transaction response.
-   */
-  private _extractContractErrorCodeFromTx(
-    pollResult: SorobanRpc.Api.GetTransactionResponse,
-  ): number | null {
-    try {
-      // The result XDR may contain a Soroban error with a contract error code
-      const resultMeta = (pollResult as { resultMetaXdr?: { toXDR?: () => Buffer } }).resultMetaXdr;
-      if (!resultMeta) return null;
-      // Parse the XDR to find contract error codes
-      // TransactionMeta v3 has sorobanMeta which has returnValue
-      // For simplicity, we use string matching on the XDR base64 representation
-      const xdrBase64 = Buffer.isBuffer(resultMeta) ? resultMeta.toString('base64') : String(resultMeta);
-      return this._extractContractErrorCode(xdrBase64);
-    } catch {
-      return null;
-    }
-  }
 }
 
 // ─── EscrowClient ─────────────────────────────────────────────────────────
 
 export interface EscrowClientOptions {
-  /** Soroban RPC client. Inject a mock for testing. */
   rpcClient: SorobanRpcClient;
-  /** Deployed escrow contract ID */
   contractId: string;
-  /** Network (testnet/mainnet) */
   network: StellarNetwork;
 }
 
-/**
- * Client for the StellarFlow escrow contract.
- *
- * ## Non-custodial usage from HTTP routes
- *
- * The escrow-router.ts HTTP endpoints use the two-step write path:
- *
- *   1. `buildDepositXdr()` / `buildReleaseXdr()` / `buildRefundXdr()`
- *      → calls rpcClient.buildUnsignedContractTx
- *      → returns unsigned XDR to the wallet
- *   2. Wallet signs and POSTs the signed XDR back
- *      → escrow-router calls `rpcClient.submitSignedTx` directly
- *
- * The EscrowClient.deposit/release/refund methods (which call invokeContract)
- * are for scripts and tests only.
- *
- * ## Read path (always non-custodial)
- *
- *   `getEscrow()` → rpcClient.simulateContract (read-only, no key needed)
- */
 export class EscrowClient {
   private readonly rpc: SorobanRpcClient;
   readonly contractId: string;
@@ -751,18 +653,9 @@ export class EscrowClient {
     this.network = opts.network;
   }
 
-  /**
-   * Build an unsigned deposit XDR for the payer's wallet to sign.
-   *
-   * Non-custodial: the server never sees the payer's private key.
-   */
   async buildDepositXdr(
-    payer: string,
-    merchant: string,
-    amount: bigint,
-    token: string,
-    orderIdHex: string,
-    timeoutLedgers: number = 0,
+    payer: string, merchant: string, amount: bigint, token: string,
+    orderIdHex: string, timeoutLedgers: number = 0,
   ): Promise<{ unsignedXdr: string; networkPassphrase: string }> {
     return this.rpc.buildUnsignedContractTx({
       contractId: this.contractId,
@@ -772,14 +665,8 @@ export class EscrowClient {
     });
   }
 
-  /**
-   * Build an unsigned release XDR for the merchant's wallet to sign.
-   *
-   * Non-custodial: the server never sees the merchant's private key.
-   */
   async buildReleaseXdr(
-    orderIdHex: string,
-    merchantAddress: string,
+    orderIdHex: string, merchantAddress: string,
   ): Promise<{ unsignedXdr: string; networkPassphrase: string }> {
     return this.rpc.buildUnsignedContractTx({
       contractId: this.contractId,
@@ -789,15 +676,8 @@ export class EscrowClient {
     });
   }
 
-  /**
-   * Build an unsigned refund XDR for the caller's wallet to sign.
-   *
-   * Caller is either the merchant (any time) or the payer (after timeout).
-   * Non-custodial: the server never sees any private key.
-   */
   async buildRefundXdr(
-    orderIdHex: string,
-    callerAddress: string,
+    orderIdHex: string, callerAddress: string,
   ): Promise<{ unsignedXdr: string; networkPassphrase: string }> {
     return this.rpc.buildUnsignedContractTx({
       contractId: this.contractId,
@@ -807,126 +687,66 @@ export class EscrowClient {
     });
   }
 
-  /**
-   * Invoke the escrow contract's `deposit` function.
-   *
-   * ⚠️  Uses invokeContract internally — for scripts/tests only.
-   * HTTP routes must use buildDepositXdr + submitSignedTx instead.
-   */
+  /** Scripts/tests only — NOT for HTTP handlers. */
   async deposit(
-    payer: string,
-    merchant: string,
-    amount: bigint,
-    token: string,
-    orderIdHex: string,
-    timeoutLedgers: number = 0,
+    payer: string, merchant: string, amount: bigint, token: string,
+    orderIdHex: string, timeoutLedgers: number = 0,
     signer?: (xdr: string) => Promise<string>,
   ): Promise<string> {
-    const signerFn = signer ?? ((_xdr: string) => Promise.reject(new Error(
-      'EscrowClient.deposit() requires a signer callback when called with invokeContract. ' +
-      'HTTP routes must use buildDepositXdr() instead.'
+    const signerFn = signer ?? (() => Promise.reject(new Error(
+      'EscrowClient.deposit() requires a signer callback. HTTP routes must use buildDepositXdr().',
     )));
-
     const result = await this.rpc.invokeContract({
-      contractId: this.contractId,
-      method: 'deposit',
+      contractId: this.contractId, method: 'deposit',
       args: [payer, merchant, amount, token, orderIdHex, timeoutLedgers],
-      signerAddress: payer,
-      signer: signerFn,
+      signerAddress: payer, signer: signerFn,
     });
-
-    if (result.status !== 'success') {
-      throw new EscrowClientError('deposit', result.errorCode ?? 0);
-    }
-
+    if (result.status !== 'success') throw new EscrowClientError('deposit', result.errorCode ?? 0);
     return result.txHash;
   }
 
-  /**
-   * Invoke the escrow contract's `release` function.
-   *
-   * ⚠️  Uses invokeContract internally — for scripts/tests only.
-   * HTTP routes must use buildReleaseXdr + submitSignedTx instead.
-   */
+  /** Scripts/tests only — NOT for HTTP handlers. */
   async release(
-    orderIdHex: string,
-    merchantAddress: string,
+    orderIdHex: string, merchantAddress: string,
     signer?: (xdr: string) => Promise<string>,
   ): Promise<string> {
-    const signerFn = signer ?? ((_xdr: string) => Promise.reject(new Error(
-      'EscrowClient.release() requires a signer callback. ' +
-      'HTTP routes must use buildReleaseXdr() instead.'
+    const signerFn = signer ?? (() => Promise.reject(new Error(
+      'EscrowClient.release() requires a signer callback. HTTP routes must use buildReleaseXdr().',
     )));
-
     const result = await this.rpc.invokeContract({
-      contractId: this.contractId,
-      method: 'release',
-      args: [orderIdHex],
-      signerAddress: merchantAddress,
-      signer: signerFn,
+      contractId: this.contractId, method: 'release',
+      args: [orderIdHex], signerAddress: merchantAddress, signer: signerFn,
     });
-
-    if (result.status !== 'success') {
-      throw new EscrowClientError('release', result.errorCode ?? 0);
-    }
-
+    if (result.status !== 'success') throw new EscrowClientError('release', result.errorCode ?? 0);
     return result.txHash;
   }
 
-  /**
-   * Invoke the escrow contract's `refund` function.
-   *
-   * ⚠️  Uses invokeContract internally — for scripts/tests only.
-   * HTTP routes must use buildRefundXdr + submitSignedTx instead.
-   */
+  /** Scripts/tests only — NOT for HTTP handlers. */
   async refund(
-    orderIdHex: string,
-    callerAddress: string,
+    orderIdHex: string, callerAddress: string,
     signer?: (xdr: string) => Promise<string>,
   ): Promise<string> {
-    const signerFn = signer ?? ((_xdr: string) => Promise.reject(new Error(
-      'EscrowClient.refund() requires a signer callback. ' +
-      'HTTP routes must use buildRefundXdr() instead.'
+    const signerFn = signer ?? (() => Promise.reject(new Error(
+      'EscrowClient.refund() requires a signer callback. HTTP routes must use buildRefundXdr().',
     )));
-
     const result = await this.rpc.invokeContract({
-      contractId: this.contractId,
-      method: 'refund',
-      args: [orderIdHex, callerAddress],
-      signerAddress: callerAddress,
-      signer: signerFn,
+      contractId: this.contractId, method: 'refund',
+      args: [orderIdHex, callerAddress], signerAddress: callerAddress, signer: signerFn,
     });
-
-    if (result.status !== 'success') {
-      throw new EscrowClientError('refund', result.errorCode ?? 0);
-    }
-
+    if (result.status !== 'success') throw new EscrowClientError('refund', result.errorCode ?? 0);
     return result.txHash;
   }
 
-  /**
-   * Read the escrow record from the contract (read-only, no auth needed).
-   *
-   * @param orderIdHex - 32-byte order ID as a 64-character hex string
-   * @returns          The on-chain escrow record
-   */
   async getEscrow(orderIdHex: string): Promise<EscrowRecord> {
     const { result } = await this.rpc.simulateContract({
-      contractId: this.contractId,
-      method: 'get_escrow',
-      args: [orderIdHex],
+      contractId: this.contractId, method: 'get_escrow', args: [orderIdHex],
     });
-
     return result as EscrowRecord;
   }
 }
 
 // ─── Escrow error ─────────────────────────────────────────────────────────
 
-/**
- * Error codes from the escrow contract's EscrowError enum.
- * These values must stay in sync with the Rust contract definition.
- */
 export const ESCROW_ERROR_CODES = {
   AlreadyExists: 1,
   NotFound: 2,
@@ -943,9 +763,6 @@ const ERROR_CODE_NAMES: Record<number, string> = Object.fromEntries(
   Object.entries(ESCROW_ERROR_CODES).map(([name, code]) => [code, name]),
 );
 
-/**
- * Error thrown by EscrowClient when the contract returns a non-success status.
- */
 export class EscrowClientError extends Error {
   readonly operation: string;
   readonly code: number;
@@ -963,31 +780,35 @@ export class EscrowClientError extends Error {
 
 // ─── Session lifecycle helpers ────────────────────────────────────────────
 
-/**
- * Convert an on-chain EscrowRecord to an EscrowSessionStatus.
- * Used to map between the contract's status enum and the TS session status.
- */
 export function escrowRecordToSessionStatus(record: EscrowRecord): EscrowSessionStatus {
   switch (record.status) {
-    case 'Held':
-      return 'deposited';
-    case 'Released':
-      return 'fulfilled';
-    case 'Refunded':
-      return 'refunded';
+    case 'Held': return 'deposited';
+    case 'Released': return 'fulfilled';
+    case 'Refunded': return 'refunded';
   }
 }
 
 /**
- * Build an order_id hex string from a session ID (bigint or string number).
- * The escrow contract uses BytesN<32> for order IDs. We derive a deterministic
- * 32-byte value from the session ID by left-padding a big-endian uint64 to 32 bytes.
- *
- * This ensures the same session ID always produces the same order_id on-chain.
+ * Generate a cryptographically random 32-byte order ID as a 64-char hex string.
+ * Each session gets a fresh random ID — not derivable from session counter,
+ * not guessable, no restart collisions.
+ */
+export function generateOrderId(): string {
+  const bytes = new Uint8Array(32);
+  // Node 18+ always has globalThis.crypto.getRandomValues (Web Crypto API).
+  // This is the minimum supported Node version for this project.
+  globalThis.crypto.getRandomValues(bytes);
+  return Buffer.from(bytes).toString('hex');
+}
+
+/**
+ * @deprecated Use generateOrderId() instead.
+ * This function derives order_id from a counter: IDs are guessable and reset
+ * on server restart, causing on-chain collisions. Kept only for existing tests
+ * that reference it directly; will be removed in a future cleanup.
  */
 export function sessionIdToOrderIdHex(sessionId: bigint | string): string {
   const n = typeof sessionId === 'bigint' ? sessionId : BigInt(sessionId);
-  // Encode as big-endian uint64 (8 bytes), then pad to 32 bytes
   const bytes = new Uint8Array(32);
   let val = n;
   for (let i = 31; i >= 24 && val > 0n; i--) {
