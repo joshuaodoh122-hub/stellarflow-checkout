@@ -48,6 +48,7 @@ import {
   Account,
   Transaction,
 } from 'stellar-sdk';
+import { randomBytes } from 'crypto';
 import type { StellarNetwork } from '@stellarflow/core';
 
 // ─── Soroban RPC endpoints ─────────────────────────────────────────────────
@@ -794,11 +795,10 @@ export function escrowRecordToSessionStatus(record: EscrowRecord): EscrowSession
  * not guessable, no restart collisions.
  */
 export function generateOrderId(): string {
-  const bytes = new Uint8Array(32);
-  // Node 18+ always has globalThis.crypto.getRandomValues (Web Crypto API).
-  // This is the minimum supported Node version for this project.
-  globalThis.crypto.getRandomValues(bytes);
-  return Buffer.from(bytes).toString('hex');
+  // Use Node's built-in crypto.randomBytes — works in all Node versions and
+  // Jest environments. globalThis.crypto.getRandomValues is not reliably present
+  // in Jest's Node runner on Node 18.x (promoted to a global only in Node 19+).
+  return randomBytes(32).toString('hex');
 }
 
 /**
