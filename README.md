@@ -9,6 +9,32 @@ Lets merchants accept **USDC** and **XLM** with ~5 second settlement and near-ze
  
 ---
 
+## What changed since 18 September 2026
+
+The repo was reviewed for the Drips Stellar Wave Program on 18 September 2026. The
+following substantive changes have been made since that review. Full details in
+[EMMY_CHANGELOG.md](EMMY_CHANGELOG.md).
+
+- **Soroban escrow contract** built and tested: `contracts/escrow` — full Rust/Soroban
+  contract with deposit, release, refund, and get_escrow; 17 Rust unit tests covering all
+  happy paths and every error code.
+- **XDR argument validation hardened**: all 6 contract arguments are now validated before
+  any transaction is forwarded to the network; post-confirmation on-chain re-verification
+  added; a real-signed-XDR test suite (35 tests using `Keypair`/`TransactionBuilder`)
+  proves every check.
+- **Test suite tripled**: 180 tests at review time → 351 tests across 15 suites; 101
+  escrow-specific tests across 2 suites.
+- **CI fixed**: ESLint failures present on all branches at review time were resolved;
+  `no-explicit-any` promoted to error.
+- **Documentation made accurate**: honest "not yet run on testnet" escrow status throughout;
+  XDR trust model, threat model, and session lifecycle documented; all contradictions
+  fixed (this release).
+- **Session/API hardened**: `GET /api/sessions` auth guard, CORS origin restriction, and
+  rate limiting (60 req/min) added post-review.
+- **Widget test coverage added**: 7 Jest/jsdom tests; ESLint extended to widget JS.
+
+---
+
 ## Two checkout modes: Classic Horizon and Soroban Escrow
 
 StellarFlow supports two independent checkout modes. They can run on the same server simultaneously.

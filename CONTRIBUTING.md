@@ -92,6 +92,11 @@ The memo-matching logic in `core/src/memo-matcher.ts` must maintain high test co
 - [ ] Non-custodial invariant is maintained
 - [ ] Testnet is still the default in all examples
 
+## Code of Conduct
+
+This project follows the [Contributor Covenant 2.1 Code of Conduct](CODE_OF_CONDUCT.md).
+By participating you agree to abide by its terms.
+
 ## Questions
 
 Open a [GitHub Discussion](https://github.com/joshuaodoh122-hub/stellarflow-checkout/discussions) for questions that aren't bug reports or feature requests.
