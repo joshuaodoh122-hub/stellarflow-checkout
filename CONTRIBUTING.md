@@ -45,19 +45,31 @@ npm test
 - Do not introduce framework dependencies into `@stellarflow/widget` — it must remain vanilla JS.
 - Match existing code style (ESLint config is in `.eslintrc.json`).
 
-## Planned stretch goals (good first issues)
+## Good first issues
 
-These are explicitly out of scope for v1 but documented here for contributors:
+Two issues are open for contribution right now. Full details (acceptance criteria,
+files to touch) are in [docs/good-first-issues.md](docs/good-first-issues.md).
 
-- **Persistent session store** — SQLite or Postgres implementation of `SessionStore` and `IdempotencyStore` interfaces (`complexity: medium`)
-- **Webhook HMAC signing** — Add HMAC-SHA256 signature header to webhook POST requests (`complexity: medium`)
-- **Reflector price oracle** — Implement `PriceSource` interface using the Reflector Soroban oracle (`complexity: high`)
-- **Email review notifications** — Alternative to webhooks for solo merchants (`complexity: medium`)
-- **Merchant review dashboard** — Simple HTML page listing flagged payments (`complexity: medium`)
-- **WooCommerce plugin** — WordPress plugin using the `@stellarflow/server` package (`complexity: high`)
-- **Shopify plugin** — Shopify app using the Checkout Extensions API (`complexity: high`)
-- **Automated refund tooling** — CLI tool for merchants to issue refunds without server-side signing keys (`complexity: high`)
-- **React wrapper** — Thin React component wrapping the widget, for merchant teams using React (`complexity: trivial`)
+- **React wrapper** (`complexity: trivial`) — thin React component wrapping the
+  vanilla widget; no payment logic required.
+- **Webhook HMAC-SHA256 signing** (`complexity: medium`) — add
+  `X-StellarFlow-Signature: sha256=<hex>` to webhook POSTs in `packages/server`.
+
+Pick one up by opening a GitHub issue linked to the relevant entry in
+`docs/good-first-issues.md`, then follow the workflow above.
+
+## Roadmap ideas (not open for contribution yet)
+
+These are tracked ideas for future versions. They are not currently filed as open
+issues and are not ready for community contributions — check back for updates.
+
+- Persistent session store — SQLite or Postgres `SessionStore` / `IdempotencyStore`
+- Reflector on-chain price oracle (`PriceSource` interface using Reflector Soroban oracle)
+- Email review notifications — alternative to webhooks for solo merchants
+- Merchant review dashboard — simple HTML page listing flagged payments
+- WooCommerce plugin
+- Shopify plugin
+- Automated refund tooling — CLI for merchants to issue refunds without server keys
 
 ## Testing
 
