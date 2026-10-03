@@ -131,7 +131,7 @@ Testnet is the default in every config, example, and script. Mainnet requires ex
 
 - The session store and idempotency store are in-memory. **A server restart loses all session state.** Do not use the demo server for production without implementing a persistent store.
 - Webhook delivery is fire-and-forget with no retry. Failed webhook handlers are logged but not retried.
-- Webhook payloads are not HMAC-signed in v1. Adding webhook signing is a documented stretch goal.
+- There is no built-in HTTP webhook delivery helper in v0.2. `SessionManager.onWebhook()` only supports in-process callbacks. A `createHttpWebhookHandler()` factory with HMAC-SHA256 signing is a documented v0.5 roadmap item — see `docs/good-first-issues.md`.
 
 ### Release API key (`RELEASE_API_KEY`)
 

@@ -52,8 +52,9 @@ files to touch) are in [docs/good-first-issues.md](docs/good-first-issues.md).
 
 - **React wrapper** (`complexity: trivial`) — thin React component wrapping the
   vanilla widget; no payment logic required.
-- **Webhook HMAC-SHA256 signing** (`complexity: medium`) — add
-  `X-StellarFlow-Signature: sha256=<hex>` to webhook POSTs in `packages/server`.
+- **HTTP webhook delivery with HMAC signing** (`complexity: medium`) — implement
+  `createHttpWebhookHandler()` in `packages/server` so merchants who run a separate
+  backend can receive events over HTTP with an `X-StellarFlow-Signature` header.
 
 Pick one up by opening a GitHub issue linked to the relevant entry in
 `docs/good-first-issues.md`, then follow the workflow above.

@@ -471,7 +471,7 @@ cd packages/server && npm test
 | v0.2 (future) | Escrow: third-party arbitration (no arbiter role in current version) |
 | v0.3 | Reflector on-chain price oracle (`ReflectorPriceSource` via `PriceSource` interface) |
 | v0.4 | Persistent session store (SQLite implementation of `SessionStore`) |
-| v0.5 | Webhook HMAC-SHA256 signing |
+| v0.5 | HTTP webhook delivery with HMAC signing (`createHttpWebhookHandler`) |
 | v1.0 | Shopify / WooCommerce plugins |
 
 ---

@@ -41,11 +41,18 @@ This document records the key architectural decisions made during the v1 build. 
 
 ### 3. Manual review flow: Webhooks
 
-**Decision:** Webhook callbacks to the merchant's configured endpoint.
+**Decision:** Webhook callbacks via `SessionManager.onWebhook(handler)`.
 
 **Why not a dashboard:** A dashboard requires a hosted frontend — out of scope for a widget library.
 **Why not email:** Requires an email provider dependency and adds configuration burden.
 **Why webhooks:** Webhooks are the standard pattern developers use with Stripe, PayPal, and every other payment processor. They work for both self-hosted and SaaS storefronts, require no persistent connection, and are easy to test with tools like webhook.site or ngrok.
+
+**Current API (v0.2):** `SessionManager.onWebhook(handler)` registers an in-process
+callback. The `handler` function is called synchronously in the same process as the
+server. Merchants who run a separate backend (e.g. a Node storefront + StellarFlow as
+a sidecar) must implement their own HTTP delivery. A ready-made `createHttpWebhookHandler()`
+factory (with HMAC-SHA256 signing) is tracked as a v0.5 roadmap item — see
+`docs/good-first-issues.md` for the full spec.
 
 **Webhook events (v1):**
 
