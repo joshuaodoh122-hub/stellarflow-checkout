@@ -228,7 +228,7 @@ The same structural checks apply to release and refund submit endpoints (method 
 
 **Threat:** If order IDs are derived from a counter that resets on server restart, an attacker can guess the next order ID and deposit against it (with wrong amounts, tokens, or parties) before the legitimate payer, blocking the legitimate deposit with `AlreadyExists` on-chain.
 
-**Mitigation:** Each session is assigned a cryptographically random 32-byte `orderId` generated with `crypto.getRandomValues` (Node 18+ built-in). IDs are not derivable from session counter, timestamp, or any other observable value. The counter used for `sessionId` (human-facing) is separate from the on-chain `orderId`. Two sessions created consecutively will have statistically independent, non-guessable order IDs.
+**Mitigation:** Each session is assigned a cryptographically random 32-byte `orderId` generated with `crypto.randomBytes(32)` (Node built-in). IDs are not derivable from session counter, timestamp, or any other observable value. The counter used for `sessionId` (human-facing) is separate from the on-chain `orderId`. Two sessions created consecutively will have statistically independent, non-guessable order IDs.
 
 ### Replay of a submitted deposit
 

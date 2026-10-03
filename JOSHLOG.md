@@ -73,8 +73,8 @@ These were applied across branches `fix/group-a-docs`, `fix/group-b-post-rejecti
 - **Coverage thresholds added** to Jest config.
 - **`.env.example` placeholder and startup check**: server exits on startup if
   `MERCHANT_ADDRESS` is unset or still the placeholder value.
-- **`render.yaml` plan**: Render deployment config added.
-- **`.nvmrc` and `engines`**: Node version pinned to 22 in `.nvmrc` and `package.json`.
+- **`render.yaml` plan**: Render deployment config already existed; the change was upgrading the plan from `free` to `starter`, with a comment that persistent disks require a paid plan.
+- **`.nvmrc` and `engines`**: `.nvmrc` is `20`; `engines` in `package.json` is `>=18.0.0`.
 - **`test:contracts` script**: `npm run test:contracts` added (runs `cargo test`).
 
 ---
@@ -157,6 +157,38 @@ said 351 total / 101 escrow. The README "What changed" section said the suite
   changed to "written, not yet run in CI" in three separate entry sections.
 
 **Files changed:** `README.md`, `JOSHLOG.md`.
+
+---
+
+### Fix 4 — generateOrderId() crashes on Node 18.x in Jest
+
+**Finding:** `escrow-session.ts` contained a comment "Node 18+ always has
+`globalThis.crypto.getRandomValues`". This is incorrect: `globalThis.crypto` was
+only promoted to a reliable global in Node 19+. On Node 18.x (the CI matrix version)
+it is `undefined` unless the process is started with `--experimental-global-webcrypto`.
+Jest does not set that flag, so every escrow test that triggered `generateOrderId()`
+crashed with:
+
+```
+TypeError: Cannot read properties of undefined (reading 'getRandomValues')
+```
+
+50 of 356 tests failed in CI as a result.
+
+**Change applied (`packages/server/src/escrow-session.ts`):**
+
+- Added `import { randomBytes } from 'crypto'` at the top of the file.
+- Replaced `globalThis.crypto.getRandomValues(new Uint8Array(32))` with
+  `randomBytes(32).toString('hex')`.
+- Node's built-in `crypto.randomBytes` is cryptographically secure, available in
+  all Node versions (no flag required), and works in every Jest environment.
+
+**Note — correcting earlier claims:** Any prior statement in this log that "Node 18+
+always has `globalThis.crypto.getRandomValues`" was inaccurate. The function is
+available in Node 18 only with `--experimental-global-webcrypto` or in a Web
+Crypto-aware runtime. `crypto.randomBytes` is the correct choice for server-side Node.
+
+**Files changed:** `packages/server/src/escrow-session.ts`.
 
 ---
 
