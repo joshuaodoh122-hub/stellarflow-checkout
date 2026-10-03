@@ -58,8 +58,7 @@ These were applied across branches `fix/group-a-docs`, `fix/group-b-post-rejecti
 `fix/group-e-correctness`. They are recorded here for completeness.
 
 - **Doc contradictions fixed**: wasm filename corrected, contradictory version strings
-  resolved (all now say 0.2.0), README "What changed since 18 September 2026" section
-  added, `EMMY_CHANGELOG.md` renamed to `JOSHLOG.md` and all references updated.
+  resolved (all now say 0.2.0), 
 - **Issue and PR templates added**: `.github/ISSUE_TEMPLATE/bug_report.yml`,
   `.github/ISSUE_TEMPLATE/feature_request.yml`, `.github/PULL_REQUEST_TEMPLATE.md`.
 - **Code of Conduct added**: `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1).
