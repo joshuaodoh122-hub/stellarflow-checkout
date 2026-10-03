@@ -5,7 +5,7 @@ Entries are append-only — never overwritten. Most recent entry at the top.
 
 ---
 
-## Summary (18 September – 3 October 2026)
+## Summary (18 September – 3 October 2026) 
 
 **Date range:** 2026-09-29 to 2026-10-02 (post-rejection improvements).
 
