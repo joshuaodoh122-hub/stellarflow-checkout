@@ -134,8 +134,17 @@ app.use(
       directives: {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'"],
-        connectSrc: ["'self'", horizonUrl, 'https://api.coingecko.com'],
-        imgSrc: ["'self'", 'data:'],
+        connectSrc: [
+          "'self'",
+          horizonUrl,
+          'https://api.coingecko.com',
+          // Stellar Wallets Kit — wallet connection endpoints used by the widget
+          'https://albedo.link',
+          'https://wallet.xbull.app',
+          'https://lobstr.co',
+          'https://stellarwalletskit.dev',
+        ],
+        imgSrc: ["'self'", 'data:', 'https:'],
         styleSrc: ["'self'", "'unsafe-inline'"],
         frameAncestors: ["'none'"],
       },
