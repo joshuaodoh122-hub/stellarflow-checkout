@@ -149,6 +149,12 @@ app.use(
         frameAncestors: ["'none'"],
       },
     },
+    // Helmet's default Cross-Origin-Opener-Policy is 'same-origin', which closes
+    // the browsing context group and breaks popup-based wallet flows (e.g. Albedo,
+    // xBull) that open a popup window and communicate back via window.opener.
+    // 'same-origin-allow-popups' keeps the COOP protection against cross-origin
+    // window attacks while still allowing same-site popup communication.
+    crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
   }),
 );
 
