@@ -1,4 +1,4 @@
-# EMMY_CHANGELOG
+# JOSHLOG
  
 Running log of every change made to this repo since the 18 September 2026 review.
 Entries are append-only — never overwritten. Most recent entry at the top.

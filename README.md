@@ -13,7 +13,7 @@ Lets merchants accept **USDC** and **XLM** with ~5 second settlement and near-ze
 
 The repo was reviewed for the Drips Stellar Wave Program on 18 September 2026. The
 following substantive changes have been made since that review. Full details in
-[EMMY_CHANGELOG.md](EMMY_CHANGELOG.md).
+[JOSHLOG.md](JOSHLOG.md).
 
 - **Soroban escrow contract** built and tested: `contracts/escrow` — full Rust/Soroban
   contract with deposit, release, refund, and get_escrow; 17 Rust unit tests covering all
