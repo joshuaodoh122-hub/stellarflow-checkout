@@ -19,6 +19,9 @@
     "@types/jest": "^29.5.0"
   },
   "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "@creit.tech/stellar-wallets-kit": "2.6.0"
   }

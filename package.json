@@ -12,6 +12,7 @@
     "typecheck": "tsc --build",
     "test": "jest --passWithNoTests",
     "test:coverage": "jest --coverage --passWithNoTests",
+    "test:contracts": "cargo test --manifest-path contracts/escrow/Cargo.toml",
     "clean": "npm run clean --workspaces --if-present && rm -rf node_modules"
   },
   "devDependencies": {
