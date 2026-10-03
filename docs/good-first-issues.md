@@ -66,72 +66,65 @@ No payment logic or server code is needed.
 
 ---
 
-## Issue 2 — Webhook HMAC-SHA256 signing
+## Issue 2 — HTTP webhook delivery handler with HMAC-SHA256 signing
 
 **Labels:** `enhancement`, `complexity: medium`, `security`
 
-**Title:** `feat: add HMAC-SHA256 signature header to webhook POST requests`
+**Title:** `feat: HTTP webhook delivery handler with HMAC-SHA256 signing`
 
 **Body:**
 
 ### Background
 
-StellarFlow fires webhook events (`payment.confirmed`, `payment.overpaid`,
-`payment.review_required`, etc.) via HTTP POST to a merchant-configured endpoint.
-Currently the payload is unsigned, so a merchant's webhook handler has no way to
-verify that the POST actually came from their StellarFlow server instance and not
-from an attacker replaying or spoofing a webhook.
+`SessionManager.onWebhook()` only supports in-process callbacks. Merchants who run
+their backend separately have no ready-made way to receive events over HTTP, and no
+way to verify that a request really came from their StellarFlow server.
 
-Adding an `X-StellarFlow-Signature` header (HMAC-SHA256 of the raw JSON body,
-keyed with a shared secret) is the standard pattern used by Stripe, GitHub, and
-most payment processors. It is the only thing standing between the current webhook
-implementation and production-readiness for security-conscious merchants.
-
-This is tracked as a roadmap item in README.md under v0.5.
+Adding an HTTP delivery helper with an `X-StellarFlow-Signature: sha256=<hex>` header
+(HMAC-SHA256 of the raw JSON body, keyed with a shared secret) is the standard pattern
+used by Stripe, GitHub, and most payment processors. It is the only thing standing
+between the current in-process-only webhook API and production-readiness for merchants
+who run a separate backend.
 
 ### What to build
 
-In `packages/server/src/session-manager.ts`, where the webhook POST is constructed:
-
-1. Add an optional `webhookSecret?: string` field to `SessionManagerOptions`.
-2. When `webhookSecret` is set, compute
-   `HMAC-SHA256(rawJsonBody, webhookSecret)` using Node's built-in `crypto` module
-   (no new dependencies).
-3. Add the result as `X-StellarFlow-Signature: sha256=<hex>` on every webhook POST.
-4. Document the header format in `SECURITY.md` and `ARCHITECTURE.md`.
-5. Add `WEBHOOK_SECRET` to `packages/demo/.env.example` with a comment.
+`createHttpWebhookHandler({ url, secret, timeoutMs?, fetchImpl? })` in
+`packages/server`, returning a `WebhookHandler` that can be passed straight to
+`onWebhook()`. It POSTs the event as JSON and sets
+`X-StellarFlow-Signature: sha256=<hex>`, the HMAC-SHA256 of the exact raw body
+bytes, using Node's built-in `crypto`. No new dependencies; use the global `fetch`
+(Node 18+), injectable for tests. Export it from `packages/server/src/index.ts`.
 
 ### Acceptance criteria
 
-- [ ] When `webhookSecret` is set, every outbound webhook POST carries
-  `X-StellarFlow-Signature: sha256=<hex>`.
-- [ ] The signature is computed with `crypto.createHmac('sha256', secret)` over
-  the exact bytes sent in the body (no double-serialisation).
-- [ ] When `webhookSecret` is not set, no signature header is added (backwards
-  compatible — existing integrations are unaffected).
-- [ ] At least three tests: correct signature present, absent when no secret,
-  signature changes when body changes.
-- [ ] A verification code snippet (for the merchant's webhook handler) is added
-  to `SECURITY.md`.
+- [ ] Correct signature present on every outbound POST.
+- [ ] Signature changes when the body changes.
+- [ ] Request times out cleanly and does not throw into `SessionManager`.
+- [ ] The signature is computed over the exact bytes sent (no double serialisation).
+- [ ] At least four tests using an injected fake fetch.
+- [ ] A verification snippet for merchants added to `SECURITY.md`.
+- [ ] `WEBHOOK_URL` and `WEBHOOK_SECRET` documented in `packages/demo/.env.example`.
 - [ ] `npm run lint && npm run typecheck && npm test` all pass.
-- [ ] No new npm dependencies (use Node built-in `crypto`).
+- [ ] No new npm dependencies (use Node built-in `crypto` and global `fetch`).
 
 ### Files to touch
 
-- `packages/server/src/session-manager.ts` — add signing logic
-- `packages/server/src/__tests__/session-manager.test.ts` — add tests
-- `packages/demo/.env.example` — add `WEBHOOK_SECRET` entry
-- `SECURITY.md` — add verification snippet
+- `packages/server/src/http-webhook-handler.ts` — new file, the handler factory
+- `packages/server/src/__tests__/http-webhook-handler.test.ts` — at least four tests
+- `packages/server/src/index.ts` — export `createHttpWebhookHandler`
+- `SECURITY.md` — merchant verification snippet
 - `ARCHITECTURE.md` — update webhook events section
+- `packages/demo/.env.example` — add `WEBHOOK_URL` and `WEBHOOK_SECRET` entries
 
 ### Complexity
 
-`complexity: medium` — touches the session manager and requires careful handling of
-the serialised body bytes to ensure the signature is reproducible on the merchant side.
+`complexity: medium` — requires careful handling of serialised body bytes to ensure
+the signature is reproducible on the merchant side. Timeout and error handling must
+not propagate exceptions into `SessionManager`.
 
 ### References
 
 - [CONTRIBUTING.md](../CONTRIBUTING.md)
 - [HMAC-SHA256 Node.js docs](https://nodejs.org/api/crypto.html#cryptocreatehmacalgorithm-key-options)
 - [Stripe webhook signing reference](https://stripe.com/docs/webhooks/signatures)
-- [`packages/server/src/session-manager.ts`](../packages/server/src/session-manager.ts)
+- [`packages/server/src/session-manager.ts`](../packages/server/src/session-manager.ts) — `onWebhook()` API
