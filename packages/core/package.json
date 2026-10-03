@@ -1,6 +1,6 @@
 {
   "name": "@stellarflow/core",
-  "version": "0.1.0", 
+  "version": "0.2.0", 
   "description": "Core logic: memo matching, idempotency, price quoting, SEP-0007, Horizon listener",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
