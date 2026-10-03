@@ -9,7 +9,7 @@ Lets merchants accept **USDC** and **XLM** with ~5 second settlement and near-ze
  
 ---
 
-## What changed since 18 September 2026
+## What changed since 18 September 2026 
 
 The repo was reviewed for the Drips Stellar Wave Program on 18 September 2026. The
 following substantive changes have been made since that review. Full details in
