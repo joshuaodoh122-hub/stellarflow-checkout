@@ -17,6 +17,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import path from 'path';
 import {
@@ -114,6 +115,25 @@ const listener = new HorizonPaymentListener(MERCHANT_ADDRESS, {
 // ─── Express app ──────────────────────────────────────────────────────────────
 
 const app = express();
+
+// Security headers — helmet with a CSP compatible with the demo's widget and API.
+// Mirrors the recommended CSP in SECURITY.md.
+const horizonUrl =
+  NETWORK === 'mainnet' ? 'https://horizon.stellar.org' : 'https://horizon-testnet.stellar.org';
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        connectSrc: ["'self'", horizonUrl, 'https://api.coingecko.com'],
+        imgSrc: ["'self'", 'data:'],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        frameAncestors: ["'none'"],
+      },
+    },
+  }),
+);
 
 // CORS — restrict to configured origin (same-origin by default).
 // Set CORS_ORIGIN=* in .env only for local cross-origin development.

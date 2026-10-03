@@ -18,4 +18,13 @@ module.exports = {
   moduleNameMapper: {
     '@creit\\.tech/stellar-wallets-kit(.*)': '<rootDir>/src/__tests__/__mocks__/stellar-wallets-kit.js',
   },
+  // Floor: a few points below measured (60/69/50/60 as of 2026-10-03).
+  coverageThreshold: {
+    global: {
+      statements: 57,
+      branches: 66,
+      functions: 47,
+      lines: 57,
+    },
+  },
 };
