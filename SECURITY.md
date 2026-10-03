@@ -88,13 +88,34 @@ Merchants embedding the widget should use:
 Content-Security-Policy:
   default-src 'self';
   script-src 'self' https://cdn.example.com;
-  connect-src 'self' https://horizon-testnet.stellar.org https://api.coingecko.com;
-  img-src 'self' data:;
+  connect-src 'self'
+    https://horizon-testnet.stellar.org
+    https://api.coingecko.com
+    https://albedo.link
+    https://wallet.xbull.app
+    https://lobstr.co
+    https://stellarwalletskit.dev;
+  img-src 'self' data: https:;
   style-src 'self' 'unsafe-inline';
   frame-ancestors 'none';
 ```
 
 For mainnet, replace `horizon-testnet.stellar.org` with `horizon.stellar.org`.
+
+**Notes on the wallet connect-src entries:** The Stellar Wallets Kit (bundled in
+`stellarflow-widget.js`) opens wallet connection endpoints at runtime. Without the
+four wallet URLs above, browsers block the wallet kit's connection requests and
+wallet-connect mode silently fails. The QR/deep-link (SEP-0007) path is unaffected.
+
+**Why `img-src 'self' data: https:`:** Wallet icons are loaded from
+`https://stellar.creit.tech/wallet-icons/` and `https://uni.onekey-asset.com/`
+by the Stellar Wallets Kit. `https:` allows any HTTPS image origin; it is broader
+than an exact allowlist but is the conventional choice when the upstream library can
+add new wallet icons without a CSP update. Do not use `*` (which would allow `http:`).
+
+**No `unsafe-inline` in `script-src`:** The demo page loads its initialisation script
+from `/demo.js` (an external file) rather than an inline `<script>` block, so
+`'unsafe-inline'` is not required in `script-src`.
 
 ### Input validation
 
@@ -110,7 +131,7 @@ Testnet is the default in every config, example, and script. Mainnet requires ex
 
 - The session store and idempotency store are in-memory. **A server restart loses all session state.** Do not use the demo server for production without implementing a persistent store.
 - Webhook delivery is fire-and-forget with no retry. Failed webhook handlers are logged but not retried.
-- Webhook payloads are not HMAC-signed in v1. Adding webhook signing is a documented stretch goal.
+- There is no built-in HTTP webhook delivery helper in v0.2. `SessionManager.onWebhook()` only supports in-process callbacks. A `createHttpWebhookHandler()` factory with HMAC-SHA256 signing is a documented v0.5 roadmap item — see `docs/good-first-issues.md`.
 
 ### Release API key (`RELEASE_API_KEY`)
 

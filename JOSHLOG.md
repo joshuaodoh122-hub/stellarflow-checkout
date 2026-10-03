@@ -18,8 +18,8 @@ Key changes since the 18 September 2026 review:
   arguments (payer, merchant, amount, token, order_id, timeout) before forwarding to the
   chain; post-confirmation on-chain record re-verification added; real signed-XDR
   supertest tests for every validation path.
-- **Test suite growth**: from 180 tests at review time to 351 tests across 15 suites;
-  101 escrow-specific tests added across 2 suites (35 use real signed XDR via
+- **Test suite growth**: from 180 tests at review time to 356 tests across 15 suites;
+  106 escrow-specific tests added across 2 suites (35 use real signed XDR via
   Keypair/TransactionBuilder).
 - **CI fixes**: ESLint `no-unused-vars` failures present on all branches at review time
   were identified and resolved; `no-explicit-any` promoted from warn to error.
@@ -31,6 +31,145 @@ Key changes since the 18 September 2026 review:
   configured origin; rate limiting (60 req/min) applied to all API routes.
 - **testnet-proof.md** created with exact run instructions and a clearly-labelled
   "NOT YET RUN" results section.
+
+---
+
+## 2026-10-03 — Review follow-ups (documentation, security, CI hygiene)
+
+**Branch:** `fix/review-followups`
+
+**PRs:** open — do not merge without explicit approval
+
+---
+
+### Context
+
+A second reviewer pass over the Group A–E changes identified five categories of
+follow-up work: a CSP that would break the demo page in a browser, an inaccurate
+good-first issue pointing at code that does not exist, stale test counts in docs,
+a missing log entry for today's session, and a tracked-but-generated file in git.
+
+---
+
+### Group A–E changes (what was already in the repo at the start of this session)
+
+These were applied across branches `fix/group-a-docs`, `fix/group-b-post-rejection`,
+`feat/group-c-contributor-backlog`, `fix/group-d-quality-safety`, and
+`fix/group-e-correctness`. They are recorded here for completeness.
+
+- **Doc contradictions fixed**: wasm filename corrected, contradictory version strings
+  resolved (all now say 0.2.0), README "What changed since 18 September 2026" section
+  added, `EMMY_CHANGELOG.md` renamed to `JOSHLOG.md` and all references updated.
+- **Issue and PR templates added**: `.github/ISSUE_TEMPLATE/bug_report.yml`,
+  `.github/ISSUE_TEMPLATE/feature_request.yml`, `.github/PULL_REQUEST_TEMPLATE.md`.
+- **Code of Conduct added**: `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1).
+- **Good first issues added**: `docs/good-first-issues.md` with two issues — React
+  wrapper (complexity: trivial) and (initially) a webhook HMAC issue (corrected below).
+- **Ecosystem doc added**: `docs/ecosystem.md`.
+- **Timing-safe fail-closed release auth**: `POST /api/escrow/:id/release` and
+  `/release/submit` now require Bearer `RELEASE_API_KEY`; comparison uses
+  `crypto.timingSafeEqual`; production mode returns 503 if key not set; 5 new tests.
+- **Helmet added**: `packages/demo/src/server.ts` now sets a CSP via helmet (corrected below).
+- **Coverage thresholds added** to Jest config.
+- **`.env.example` placeholder and startup check**: server exits on startup if
+  `MERCHANT_ADDRESS` is unset or still the placeholder value.
+- **`render.yaml` plan**: Render deployment config added.
+- **`.nvmrc` and `engines`**: Node version pinned to 22 in `.nvmrc` and `package.json`.
+- **`test:contracts` script**: `npm run test:contracts` added (runs `cargo test`).
+
+---
+
+### Fix 1 — CSP would break the demo page
+
+**Finding:** `packages/demo/src/server.ts` set `scriptSrc: ["'self'"]` but
+`packages/demo/public/index.html` had an inline `<script>` block (calling
+`StellarFlow.init()`). A browser would block the script under that CSP, silently
+preventing the widget from initialising. Additionally, `imgSrc: ["'self'", 'data:']`
+blocked wallet icons loaded from `https://stellar.creit.tech/wallet-icons/` and
+`https://uni.onekey-asset.com/` by the bundled Stellar Wallets Kit.
+
+**Changes applied:**
+
+- Extracted the inline `<script>` block from `index.html` into
+  `packages/demo/public/demo.js`; loaded it with `<script src="/demo.js"></script>`.
+  No `'unsafe-inline'` added to `scriptSrc`.
+- Added `https:` to `imgSrc` so wallet icons load. `https:` is broader than an exact
+  allowlist but is conventional when the upstream library can add new wallet icons
+  without a CSP update.
+- Added four `connect-src` entries required by the Stellar Wallets Kit's wallet
+  connection flow: `https://albedo.link`, `https://wallet.xbull.app`,
+  `https://lobstr.co`, `https://stellarwalletskit.dev`.
+- Updated `SECURITY.md` recommended CSP to match `server.ts`.
+- Updated the CSP comment in `index.html` to match.
+
+**Browser verification:** A browser was not available in this environment. The above
+entries were identified by inspecting the URLs in the built
+`packages/demo/public/stellarflow-widget.js` bundle (grep for `https://` hostnames
+in image and connection contexts). No `frame-src` or `font-src` additions were
+needed — the widget uses no iframes and only system fonts.
+
+**Files changed:** `packages/demo/public/demo.js` (new), `packages/demo/public/index.html`,
+`packages/demo/src/server.ts`, `SECURITY.md`.
+
+---
+
+### Fix 2 — Good-first issue 2 was inaccurate
+
+**Finding:** Issue 2 in `docs/good-first-issues.md` stated that StellarFlow "fires
+webhook events via HTTP POST to a merchant-configured endpoint" and pointed at
+"where the webhook POST is constructed" in `packages/server/src/session-manager.ts`.
+That code does not exist. Webhooks are in-process callbacks registered via
+`SessionManager.onWebhook(handler)`. A contributor would find nothing to sign.
+
+**Changes applied:**
+
+- Replaced issue 2 with an accurate `createHttpWebhookHandler()` spec:
+  a factory returning a `WebhookHandler` that POSTs JSON with an
+  `X-StellarFlow-Signature: sha256=<hex>` header (HMAC-SHA256 via Node `crypto`),
+  injectable `fetch` for tests, timeout handling, no new dependencies.
+- Updated `CONTRIBUTING.md` one-line bullet for issue 2.
+- Updated `README.md` roadmap v0.5 row: "HTTP webhook delivery with HMAC signing".
+- Updated `ARCHITECTURE.md` webhook section: clarified that `onWebhook()` is
+  in-process only; added forward reference to v0.5 roadmap item.
+- Updated `SECURITY.md` known limitations: replaced "not HMAC-signed" with accurate
+  description of the in-process-only API.
+
+**Files changed:** `docs/good-first-issues.md`, `CONTRIBUTING.md`, `README.md`,
+`ARCHITECTURE.md`, `SECURITY.md`.
+
+---
+
+### Fix 3 — Stale test counts
+
+**Finding:** Group D added 5 tests after Group A wrote the counts. Every doc still
+said 351 total / 101 escrow. The README "What changed" section said the suite
+"tripled" (180→351 is ~1.95x, not 3x).
+
+**`npm test` run on 2026-10-03:** 356 tests, 15 suites, 106 escrow tests
+(escrow-router.test.ts + escrow-session.test.ts).
+
+**Changes applied:**
+
+- `README.md`: 351→356 (3 occurrences), 101→106 (2 occurrences), "tripled"→"nearly
+  doubled", Rust claim updated to "written, not yet run in CI" (1 occurrence).
+- `JOSHLOG.md`: summary block 351→356 and 101→106; coverage table annotated with
+  356 as of 2026-10-03; test count before/after note updated; Rust "were passing"
+  changed to "written, not yet run in CI" in three separate entry sections.
+
+**Files changed:** `README.md`, `JOSHLOG.md`.
+
+---
+
+### Verification
+
+```
+npm run lint       ✅ 0 errors, 0 warnings
+npm run typecheck  ✅ exit 0
+npm test           ✅ 356/356 tests, 15 suites (run 2026-10-03)
+```
+
+Rust contract tests: 17 tests written, not yet run in CI — `cargo` not available
+in this environment (requires `wasm32v1-none` target + soroban-sdk).
 
 ---
 
@@ -266,7 +405,7 @@ Additional cleanups in this fix:
 |---------|--------|
 | `npm run lint` | ✅ exit 0, clean — 0 errors, 0 warnings |
 | `npm run typecheck` | ✅ exit 0, clean |
-| `npm run test:coverage` | ✅ 351/351 tests, 15 suites |
+| `npm run test:coverage` | ✅ 351/351 tests, 15 suites (356/356 as of 2026-10-03 after review follow-ups) |
 | `cargo` checks | cargo not available in this environment — Rust checks not run |
 
 **Coverage (`npm run test:coverage`):**
@@ -281,7 +420,7 @@ Additional cleanups in this fix:
 ### Test count before / after
 
 - Before this session: 260 tests (the previous session had 260 when it was clean)
-- After: **351 tests, 15 suites** (+91 tests — escrow router + escrow session tests)
+- After: **351 tests, 15 suites** (+91 tests — escrow router + escrow session tests; updated to 356 after 2026-10-03 review follow-ups)
 
 New tests using real signed transactions (real Keypair/TransactionBuilder XDR):
 - 24 deposit submit tests in `escrow-router.test.ts` (all use `buildSignedDepositXdr`)
@@ -307,7 +446,7 @@ All mutations restored before committing.
 ### What remains unproven
 
 **Live testnet run:** The escrow contract is not deployed to testnet. The TypeScript
-implementation and all 101 escrow tests pass against a mocked network. The
+implementation and all 106 escrow tests pass against a mocked network. The
 `scripts/escrow-testnet-demo.ts` script is ready and uses only server endpoints.
 To complete the proof, deploy the contract (see `contracts/escrow/DEPLOY.md`),
 run the script, and paste the output into `docs/testnet-proof.md`.
@@ -316,9 +455,9 @@ run the script, and paste the output into `docs/testnet-proof.md`.
 ```
 cargo not available, Rust checks not run
 ```
-The Rust contract source (`contracts/escrow/src/lib.rs`) was NOT modified. All 17
-Rust tests were passing before this session and should still pass in an environment
-with the Rust toolchain installed.
+The Rust contract source (`contracts/escrow/src/lib.rs`) was NOT modified. The 17
+Rust tests are written but not yet run in CI — they require a Rust toolchain with
+the `wasm32v1-none` target, which is not installed in this environment.
 
 ### Files created / modified
 
@@ -440,7 +579,7 @@ Same Bearer token used for `GET /api/sessions` and `POST /api/escrow/:id/release
 
 **BLOCKED:** `cargo` is not installed in this environment. The 17 Rust contract tests in `contracts/escrow/src/lib.rs` could not be run.
 
-**Important:** The Rust contract source (`lib.rs`) was **not modified** in this session. All 17 tests were passing before this session began and should still pass in an environment with Rust toolchain installed (`wasm32v1-none` target + soroban-sdk).
+**Important:** The Rust contract source (`lib.rs`) was **not modified** in this session. The 17 Rust tests are written but not yet run in CI — `cargo` is not available in this environment (requires `wasm32v1-none` target + soroban-sdk).
 
 **To verify:** In an environment with Rust:
 ```bash
@@ -783,7 +922,7 @@ to `contracts/**` and runs independently of the JS/TS `ci.yml`.
 **New: `contracts/escrow/DEPLOY.md`** — deployment guide; honest statement that no
 live testnet deployment was performed in this PR.
 
-**17 Rust tests** in `contracts/escrow/src/lib.rs` (all pass):
+**17 Rust tests** in `contracts/escrow/src/lib.rs` (written, not yet run in CI — requires Rust toolchain):
 
 | Test | Coverage |
 |------|---------|
