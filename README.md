@@ -22,7 +22,7 @@ following substantive changes have been made since that review. Full details in
   any transaction is forwarded to the network; post-confirmation on-chain re-verification
   added; a real-signed-XDR test suite (35 tests using `Keypair`/`TransactionBuilder`)
   proves every check.
-- **Test suite tripled**: 180 tests at review time → 351 tests across 15 suites; 101
+- **Test suite nearly doubled**: 180 tests at review time → 356 tests across 15 suites; 106
   escrow-specific tests across 2 suites.
 - **CI fixed**: ESLint failures present on all branches at review time were resolved;
   `no-explicit-any` promoted to error.
@@ -70,7 +70,7 @@ StellarFlow supports two independent checkout modes. They can run on the same se
 | Testnet proof script | ✅ Written, uses server endpoints, typechecks | `scripts/escrow-testnet-demo.ts` |
 | Live testnet run | ⏳ **Not yet run** — requires deployed contract + funded accounts | See below |
 
-**What "not yet run" means:** The TypeScript implementation is complete and all 101 escrow unit/integration tests pass (2 suites — see CI badge for current totals). The escrow contract itself is not yet deployed to testnet by this author. The testnet proof script (`scripts/escrow-testnet-demo.ts`) is ready to execute once a contract is deployed.
+**What "not yet run" means:** The TypeScript implementation is complete and all 106 escrow unit/integration tests pass (2 suites — see CI badge for current totals). The escrow contract itself is not yet deployed to testnet by this author. The testnet proof script (`scripts/escrow-testnet-demo.ts`) is ready to execute once a contract is deployed.
 
 ---
 
@@ -109,7 +109,7 @@ After the deposit transaction confirms on-chain, `getEscrow()` is called and the
 - No third-party arbitration — if merchant claims fulfilment and payer disagrees, payer must wait for timeout
 - Single token per order — one SAC token contract per escrow
 - Session store is in-memory — server restart loses escrow session state (same limitation as classic checkout)
-- The 17 Rust contract tests pass in an environment with Rust installed — they could not be run in this CI environment (no `cargo` available)
+- The 17 Rust contract tests are written but not yet run in CI — `cargo` is not available in the CI environment; they require a Rust toolchain with the `wasm32v1-none` target
 
 **Soroban SDK note:** This integration uses `stellar-sdk@12.3.0` (already in the repo) which ships full Soroban support (`SorobanRpc.Server`, `Contract`, `nativeToScVal`, `scValToNative`, `assembleTransaction`). A separate `@stellar/stellar-sdk` package is not needed and was not added.
 
@@ -411,7 +411,7 @@ npm install        # install all workspace dependencies
 npm run build      # compile all TypeScript packages
 npm run typecheck  # type-check without emitting
 npm run lint       # ESLint
-npm test           # run all tests (351 as of 2026-10-03 — see CI badge for current count)
+npm test           # run all tests (356 as of 2026-10-03 — see CI badge for current count)
 npm run test:coverage  # with coverage report
 ```
 
@@ -455,7 +455,7 @@ cd packages/server && npm test
 
 6. **Soroban escrow: tested against a mocked network only.** The server validates every
    XDR argument, verifies the on-chain record after confirmation (against a mock), and
-   all 101 escrow unit/integration tests pass (2 suites, verified 2026-10-03). The contract has 17 Rust unit tests.
+   all 106 escrow unit/integration tests pass (2 suites, verified 2026-10-03). The contract has 17 Rust unit tests written (not yet run in CI — requires Rust toolchain).
    Neither has been run against a live testnet — that requires a deployed contract and
    funded accounts. See the [Soroban escrow — honest status](#soroban-escrow--honest-status-v02)
    section above.

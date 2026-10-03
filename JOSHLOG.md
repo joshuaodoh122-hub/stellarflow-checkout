@@ -18,8 +18,8 @@ Key changes since the 18 September 2026 review:
   arguments (payer, merchant, amount, token, order_id, timeout) before forwarding to the
   chain; post-confirmation on-chain record re-verification added; real signed-XDR
   supertest tests for every validation path.
-- **Test suite growth**: from 180 tests at review time to 351 tests across 15 suites;
-  101 escrow-specific tests added across 2 suites (35 use real signed XDR via
+- **Test suite growth**: from 180 tests at review time to 356 tests across 15 suites;
+  106 escrow-specific tests added across 2 suites (35 use real signed XDR via
   Keypair/TransactionBuilder).
 - **CI fixes**: ESLint `no-unused-vars` failures present on all branches at review time
   were identified and resolved; `no-explicit-any` promoted from warn to error.
@@ -266,7 +266,7 @@ Additional cleanups in this fix:
 |---------|--------|
 | `npm run lint` | ✅ exit 0, clean — 0 errors, 0 warnings |
 | `npm run typecheck` | ✅ exit 0, clean |
-| `npm run test:coverage` | ✅ 351/351 tests, 15 suites |
+| `npm run test:coverage` | ✅ 351/351 tests, 15 suites (356/356 as of 2026-10-03 after review follow-ups) |
 | `cargo` checks | cargo not available in this environment — Rust checks not run |
 
 **Coverage (`npm run test:coverage`):**
@@ -281,7 +281,7 @@ Additional cleanups in this fix:
 ### Test count before / after
 
 - Before this session: 260 tests (the previous session had 260 when it was clean)
-- After: **351 tests, 15 suites** (+91 tests — escrow router + escrow session tests)
+- After: **351 tests, 15 suites** (+91 tests — escrow router + escrow session tests; updated to 356 after 2026-10-03 review follow-ups)
 
 New tests using real signed transactions (real Keypair/TransactionBuilder XDR):
 - 24 deposit submit tests in `escrow-router.test.ts` (all use `buildSignedDepositXdr`)
@@ -307,7 +307,7 @@ All mutations restored before committing.
 ### What remains unproven
 
 **Live testnet run:** The escrow contract is not deployed to testnet. The TypeScript
-implementation and all 101 escrow tests pass against a mocked network. The
+implementation and all 106 escrow tests pass against a mocked network. The
 `scripts/escrow-testnet-demo.ts` script is ready and uses only server endpoints.
 To complete the proof, deploy the contract (see `contracts/escrow/DEPLOY.md`),
 run the script, and paste the output into `docs/testnet-proof.md`.
@@ -316,9 +316,9 @@ run the script, and paste the output into `docs/testnet-proof.md`.
 ```
 cargo not available, Rust checks not run
 ```
-The Rust contract source (`contracts/escrow/src/lib.rs`) was NOT modified. All 17
-Rust tests were passing before this session and should still pass in an environment
-with the Rust toolchain installed.
+The Rust contract source (`contracts/escrow/src/lib.rs`) was NOT modified. The 17
+Rust tests are written but not yet run in CI — they require a Rust toolchain with
+the `wasm32v1-none` target, which is not installed in this environment.
 
 ### Files created / modified
 
@@ -440,7 +440,7 @@ Same Bearer token used for `GET /api/sessions` and `POST /api/escrow/:id/release
 
 **BLOCKED:** `cargo` is not installed in this environment. The 17 Rust contract tests in `contracts/escrow/src/lib.rs` could not be run.
 
-**Important:** The Rust contract source (`lib.rs`) was **not modified** in this session. All 17 tests were passing before this session began and should still pass in an environment with Rust toolchain installed (`wasm32v1-none` target + soroban-sdk).
+**Important:** The Rust contract source (`lib.rs`) was **not modified** in this session. The 17 Rust tests are written but not yet run in CI — `cargo` is not available in this environment (requires `wasm32v1-none` target + soroban-sdk).
 
 **To verify:** In an environment with Rust:
 ```bash
@@ -783,7 +783,7 @@ to `contracts/**` and runs independently of the JS/TS `ci.yml`.
 **New: `contracts/escrow/DEPLOY.md`** — deployment guide; honest statement that no
 live testnet deployment was performed in this PR.
 
-**17 Rust tests** in `contracts/escrow/src/lib.rs` (all pass):
+**17 Rust tests** in `contracts/escrow/src/lib.rs` (written, not yet run in CI — requires Rust toolchain):
 
 | Test | Coverage |
 |------|---------|
