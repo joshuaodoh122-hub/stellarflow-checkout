@@ -92,6 +92,13 @@ Run with coverage:
 npm run test:coverage
 ```
 
+Run the Rust/Soroban contract unit tests (requires Rust toolchain with `wasm32v1-none` target):
+
+```bash
+npm run test:contracts
+# equivalent to: cargo test --manifest-path contracts/escrow/Cargo.toml
+```
+
 The memo-matching logic in `core/src/memo-matcher.ts` must maintain high test coverage. Do not reduce coverage below what is currently passing CI.
 
 ## Pull request checklist
