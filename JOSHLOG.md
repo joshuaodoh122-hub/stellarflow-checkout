@@ -73,8 +73,8 @@ These were applied across branches `fix/group-a-docs`, `fix/group-b-post-rejecti
 - **Coverage thresholds added** to Jest config.
 - **`.env.example` placeholder and startup check**: server exits on startup if
   `MERCHANT_ADDRESS` is unset or still the placeholder value.
-- **`render.yaml` plan**: Render deployment config added.
-- **`.nvmrc` and `engines`**: Node version pinned to 22 in `.nvmrc` and `package.json`.
+- **`render.yaml` plan**: changed from `free` to `starter`, because persistent disk need a paid Render plan.
+- **`.nvmrc` and `engines`**:`.nvmrc` set to 20; `engines` is >=18.0.0.
 - **`test:contracts` script**: `npm run test:contracts` added (runs `cargo test`).
 
 ---
