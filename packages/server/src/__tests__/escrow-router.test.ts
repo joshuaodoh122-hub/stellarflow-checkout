@@ -768,6 +768,84 @@ describe('POST /api/escrow/:orderId/release', () => {
   });
 });
 
+// ─── requireReleaseAuth — timing-safe and production-without-key ──────────────
+
+describe('requireReleaseAuth', () => {
+  it('200 when correct key provided', async () => {
+    const rpc = createMockRpc();
+    const { app } = makeApp({}, rpc);
+    const orderId = await createDepositedSession(app, rpc);
+    const res = await request(app)
+      .post(`/api/escrow/${orderId}/release`)
+      .set('Authorization', `Bearer ${RELEASE_API_KEY}`)
+      .send({ merchantAddress: MERCHANT });
+    expect(res.status).toBe(200);
+  });
+
+  it('401 when wrong key provided', async () => {
+    const rpc = createMockRpc();
+    const { app } = makeApp({}, rpc);
+    const orderId = await createDepositedSession(app, rpc);
+    const res = await request(app)
+      .post(`/api/escrow/${orderId}/release`)
+      .set('Authorization', 'Bearer wrong-key')
+      .send({ merchantAddress: MERCHANT });
+    expect(res.status).toBe(401);
+  });
+
+  it('401 when Authorization header is missing', async () => {
+    const rpc = createMockRpc();
+    const { app } = makeApp({}, rpc);
+    const orderId = await createDepositedSession(app, rpc);
+    const res = await request(app)
+      .post(`/api/escrow/${orderId}/release`)
+      .send({ merchantAddress: MERCHANT });
+    expect(res.status).toBe(401);
+  });
+
+  it('401 when key has different length (timing-safe guard)', async () => {
+    const rpc = createMockRpc();
+    const { app } = makeApp({}, rpc);
+    const orderId = await createDepositedSession(app, rpc);
+    // Provide a key that is a prefix of the real key — same bytes but shorter
+    const shortKey = RELEASE_API_KEY.slice(0, -1);
+    const res = await request(app)
+      .post(`/api/escrow/${orderId}/release`)
+      .set('Authorization', `Bearer ${shortKey}`)
+      .send({ merchantAddress: MERCHANT });
+    expect(res.status).toBe(401);
+  });
+
+  it('503 on release when production NODE_ENV and no key configured', async () => {
+    const prevEnv = process.env['NODE_ENV'];
+    process.env['NODE_ENV'] = 'production';
+    try {
+      // Router created with no releaseApiKey
+      const rpc = createMockRpc();
+      const store = new EscrowSessionStore();
+      const app = express();
+      app.use(express.json());
+      const router = createEscrowRouter({
+        rpcClient: rpc,
+        contractId: CONTRACT_ID,
+        network: 'testnet',
+        releaseApiKey: undefined,  // no key
+        sessionStore: store,
+      });
+      app.use('/api', router);
+      // Manually insert a deposited session
+      const orderId = await createDepositedSession(app, rpc);
+      const res = await request(app)
+        .post(`/api/escrow/${orderId}/release`)
+        .send({ merchantAddress: MERCHANT });
+      expect(res.status).toBe(503);
+      expect(res.body.error).toMatch(/RELEASE_API_KEY/);
+    } finally {
+      process.env['NODE_ENV'] = prevEnv;
+    }
+  });
+});
+
 // ─── POST /api/escrow/:orderId/release/submit ─────────────────────────────────
 
 describe('POST /api/escrow/:orderId/release/submit', () => {

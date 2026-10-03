@@ -112,6 +112,21 @@ Testnet is the default in every config, example, and script. Mainnet requires ex
 - Webhook delivery is fire-and-forget with no retry. Failed webhook handlers are logged but not retried.
 - Webhook payloads are not HMAC-signed in v1. Adding webhook signing is a documented stretch goal.
 
+### Release API key (`RELEASE_API_KEY`)
+
+`POST /api/escrow/:id/release` and `POST /api/escrow/:id/release/submit` are
+protected by a Bearer token (`RELEASE_API_KEY`). The comparison uses
+`crypto.timingSafeEqual` to prevent timing-oracle attacks.
+
+**Production behaviour (when `NODE_ENV=production`):**
+- If `RELEASE_API_KEY` is not set, both endpoints return `503` with a clear
+  message. The server logs a startup warning. Release and refund are **not**
+  open by default in production.
+
+**Non-production behaviour:**
+- If `RELEASE_API_KEY` is not set, both endpoints are open (dev convenience).
+  Never deploy to production without setting this variable.
+
 ---
 
 ## Soroban escrow contract security (v0.2)
