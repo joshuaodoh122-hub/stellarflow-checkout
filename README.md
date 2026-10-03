@@ -44,7 +44,7 @@ StellarFlow supports two independent checkout modes. They can run on the same se
 | Testnet proof script | ✅ Written, uses server endpoints, typechecks | `scripts/escrow-testnet-demo.ts` |
 | Live testnet run | ⏳ **Not yet run** — requires deployed contract + funded accounts | See below |
 
-**What "not yet run" means:** The TypeScript implementation is complete and all 101 new unit/integration tests pass. The escrow contract itself is not yet deployed to testnet by this author. The testnet proof script (`scripts/escrow-testnet-demo.ts`) is ready to execute once a contract is deployed.
+**What "not yet run" means:** The TypeScript implementation is complete and all 101 escrow unit/integration tests pass (2 suites — see CI badge for current totals). The escrow contract itself is not yet deployed to testnet by this author. The testnet proof script (`scripts/escrow-testnet-demo.ts`) is ready to execute once a contract is deployed.
 
 ---
 
@@ -99,7 +99,7 @@ After the deposit transaction confirms on-chain, `getEscrow()` is called and the
 cd contracts/escrow
 cargo build --target wasm32v1-none --release
 stellar contract deploy \
-  --wasm target/wasm32v1-none/release/escrow.wasm \
+  --wasm target/wasm32v1-none/release/stellarflow_escrow.wasm \
   --network testnet \
   --source <your-funded-account>
 # Note the contract address (C...)
@@ -119,20 +119,6 @@ npx ts-node scripts/escrow-testnet-demo.ts
 ```
 
 The script will print every transaction hash and links to stellar.expert for verification.
-
----
-
-## Soroban status — honest statement
-
-**v0.1 uses Horizon (Stellar Classic) only for the classic payment flow.** That flow is:
-SEP-0007 URI → customer wallet → Stellar transaction → Horizon SSE stream → memo matching.
-
-**v0.2 adds a real Soroban escrow checkout mode.** See the "Two checkout modes" section above and the implementation in `packages/server/src/escrow-session.ts` and `packages/server/src/escrow-router.ts`.
-
-| Feature | Status | Branch |
-|---|---|---|
-| Soroban escrow checkout (`EscrowCheckoutSession`) | ✅ Built & tested — testnet deploy pending | `feat/escrow-rpc-client`, `feat/escrow-checkout-routes` |
-| Reflector on-chain price oracle (`ReflectorPriceSource`) | Planned v0.3 | — |
 
 ---
 
@@ -399,7 +385,7 @@ npm install        # install all workspace dependencies
 npm run build      # compile all TypeScript packages
 npm run typecheck  # type-check without emitting
 npm run lint       # ESLint
-npm test           # run all 180 tests
+npm test           # run all tests (351 as of 2026-10-03 — see CI badge for current count)
 npm run test:coverage  # with coverage report
 ```
 
@@ -443,7 +429,7 @@ cd packages/server && npm test
 
 6. **Soroban escrow: tested against a mocked network only.** The server validates every
    XDR argument, verifies the on-chain record after confirmation (against a mock), and
-   all 101 escrow unit/integration tests pass. The contract has 17 Rust unit tests.
+   all 101 escrow unit/integration tests pass (2 suites, verified 2026-10-03). The contract has 17 Rust unit tests.
    Neither has been run against a live testnet — that requires a deployed contract and
    funded accounts. See the [Soroban escrow — honest status](#soroban-escrow--honest-status-v02)
    section above.
