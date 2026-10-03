@@ -1,7 +1,37 @@
 # EMMY_CHANGELOG
  
-Single source of truth for every change made to this repo during the post-review improvements.
+Running log of every change made to this repo since the 18 September 2026 review.
 Entries are append-only — never overwritten. Most recent entry at the top.
+
+---
+
+## Summary (18 September – 3 October 2026)
+
+**Date range:** 2026-09-29 to 2026-10-02 (post-rejection improvements).
+
+Key changes since the 18 September 2026 review:
+
+- **Soroban escrow contract** (`contracts/escrow`): full Rust/Soroban smart contract with
+  `deposit`, `release`, `refund`, and `get_escrow` functions; 17 Rust unit tests covering
+  all happy paths and every error code.
+- **XDR validation audit**: the deposit submit endpoint now validates all 6 contract
+  arguments (payer, merchant, amount, token, order_id, timeout) before forwarding to the
+  chain; post-confirmation on-chain record re-verification added; real signed-XDR
+  supertest tests for every validation path.
+- **Test suite growth**: from 180 tests at review time to 351 tests across 15 suites;
+  101 escrow-specific tests added across 2 suites (35 use real signed XDR via
+  Keypair/TransactionBuilder).
+- **CI fixes**: ESLint `no-unused-vars` failures present on all branches at review time
+  were identified and resolved; `no-explicit-any` promoted from warn to error.
+- **Documentation overhaul**: honest "not yet run on testnet" status throughout; escrow
+  trust model, XDR validation list, threat model, and session lifecycle added; stale
+  claims removed.
+- **Widget test coverage**: 7 new Jest/jsdom tests; ESLint coverage extended to widget JS.
+- **Session/API hardening**: `GET /api/sessions` auth guard added; CORS restricted to
+  configured origin; rate limiting (60 req/min) applied to all API routes.
+- **testnet-proof.md** created with exact run instructions and a clearly-labelled
+  "NOT YET RUN" results section.
+
 ---
 
 ## 2026-10-02 — Soroban escrow audit: safety fixes v0.2.1

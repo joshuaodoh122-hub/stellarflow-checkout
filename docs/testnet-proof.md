@@ -37,7 +37,7 @@ cargo build --target wasm32v1-none --release
 
 # Deploy to testnet (replace <FUNDED_ACCOUNT> with a funded testnet keypair secret)
 stellar contract deploy \
-  --wasm target/wasm32v1-none/release/escrow.wasm \
+  --wasm target/wasm32v1-none/release/stellarflow_escrow.wasm \
   --network testnet \
   --source <FUNDED_ACCOUNT>
 # Note the contract ID printed (starts with C...)

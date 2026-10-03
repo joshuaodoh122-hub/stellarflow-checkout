@@ -6,7 +6,7 @@ This project uses [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [Unreleased]
+## [0.2.0] — 2026-10-03
 
 ### Added
 
@@ -127,7 +127,7 @@ This project uses [Semantic Versioning](https://semver.org/).
   (destination, asset, amount, MEMO\_ID) for both XLM and USDC sessions
   (`tx-builder.test.ts`).
 - `CHANGELOG.md` (this file).
-- `CHANGELOG.md` — running audit log for all post-review improvements.
+- `CHANGELOG.md` — running log of post-review improvements.
 
 ### Changed
 

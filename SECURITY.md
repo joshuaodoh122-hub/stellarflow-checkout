@@ -4,7 +4,8 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.1.x (current) | ✅ |
+| 0.2.x (current) | ✅ |
+| 0.1.x | ❌ upgrade to 0.2.x |
 
 ## Reporting a vulnerability
 
@@ -24,14 +25,29 @@ We aim to acknowledge reports within 48 hours and to publish a fix or mitigation
 
 ### Non-custodial invariant
 
-StellarFlow is strictly non-custodial. The system is designed so that:
+StellarFlow is strictly non-custodial in both checkout modes.
+
+**Classic Horizon flow:** Funds flow directly from the customer's wallet to the merchant's
+configured Stellar address. The server observes the blockchain and updates session state —
+it never touches funds.
 
 - Funds flow **directly** from the customer's wallet to the merchant's configured Stellar address.
 - The StellarFlow server holds **no private keys**.
 - The server has **no signing authority** over any funds.
-- There is **no escrow**, intermediary account, or pooling.
+- There is no intermediary account or pooling.
 
-Any code path that would give the server signing authority over funds is a **critical vulnerability**, regardless of whether it is intentional.
+**Soroban escrow flow:** Funds are held on-chain in the escrow smart contract, not by the
+server. The non-custodial invariant is maintained with respect to the server:
+
+- The server never holds or sees a private key.
+- The server constructs unsigned transactions and returns them to the caller's wallet to sign.
+- All contract invocations (`deposit`, `release`, `refund`) are signed by the caller's own
+  wallet — the server has no signing authority.
+- The escrow contract holds funds on-chain between deposit and release/refund. This is
+  transparent and verifiable on-chain.
+
+Any code path that would give the server signing authority over funds in either flow is a
+**critical vulnerability**, regardless of whether it is intentional.
 
 ### Idempotency
 
@@ -95,6 +111,21 @@ Testnet is the default in every config, example, and script. Mainnet requires ex
 - The session store and idempotency store are in-memory. **A server restart loses all session state.** Do not use the demo server for production without implementing a persistent store.
 - Webhook delivery is fire-and-forget with no retry. Failed webhook handlers are logged but not retried.
 - Webhook payloads are not HMAC-signed in v1. Adding webhook signing is a documented stretch goal.
+
+### Release API key (`RELEASE_API_KEY`)
+
+`POST /api/escrow/:id/release` and `POST /api/escrow/:id/release/submit` are
+protected by a Bearer token (`RELEASE_API_KEY`). The comparison uses
+`crypto.timingSafeEqual` to prevent timing-oracle attacks.
+
+**Production behaviour (when `NODE_ENV=production`):**
+- If `RELEASE_API_KEY` is not set, both endpoints return `503` with a clear
+  message. The server logs a startup warning. Release and refund are **not**
+  open by default in production.
+
+**Non-production behaviour:**
+- If `RELEASE_API_KEY` is not set, both endpoints are open (dev convenience).
+  Never deploy to production without setting this variable.
 
 ---
 

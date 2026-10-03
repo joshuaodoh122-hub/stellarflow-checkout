@@ -313,7 +313,7 @@ stellarflow-checkout/
 ## Soroban Escrow Contract (v0.2)
 
 This section documents the architectural decisions for the Soroban escrow checkout
-mode added in v0.2 on `feat/soroban-escrow`. This is a NEW checkout mode alongside
+mode added in v0.2. This is a NEW checkout mode alongside
 the existing Horizon-based flow — it does NOT replace it.
 
 ### State machine

@@ -24,4 +24,13 @@ module.exports = {
   moduleNameMapper: {
     '^@stellarflow/core$': '<rootDir>/../core/src/index.ts',
   },
+  // Floor: a few points below measured (88/77/95/88 as of 2026-10-03).
+  coverageThreshold: {
+    global: {
+      statements: 85,
+      branches: 74,
+      functions: 92,
+      lines: 85,
+    },
+  },
 };

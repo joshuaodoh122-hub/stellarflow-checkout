@@ -59,6 +59,7 @@
  */
 
 import { Router, type Request, type Response } from 'express';
+import { timingSafeEqual } from 'crypto';
 import { TransactionBuilder, StrKey, scValToNative } from 'stellar-sdk';
 import { NETWORK_PASSPHRASES } from '@stellarflow/core';
 import type { StellarNetwork } from '@stellarflow/core';
@@ -174,9 +175,37 @@ export function createEscrowRouter(opts: EscrowRouterOptions): Router {
   }
 
   function requireReleaseAuth(req: Request, res: Response): boolean {
-    if (!releaseApiKey) return false;
+    const isProd = process.env['NODE_ENV'] === 'production';
+
+    if (!releaseApiKey) {
+      // In production with no key configured, fail closed — do not allow every
+      // request through. The startup warning in createEscrowRouterFromEnv alerts
+      // the operator; here we reject the request cleanly.
+      if (isProd) {
+        res.status(503).json({
+          error:
+            'Release/refund endpoints require RELEASE_API_KEY in production. ' +
+            'Set the RELEASE_API_KEY environment variable.',
+        });
+        return true;
+      }
+      // Non-production with no key: open (dev/test convenience).
+      return false;
+    }
+
     const auth = req.headers['authorization'];
-    if (!auth || auth !== `Bearer ${releaseApiKey}`) {
+    const provided = auth?.startsWith('Bearer ') ? auth.slice(7) : '';
+
+    // Use timing-safe comparison to prevent timing-oracle attacks.
+    // Pad/truncate both sides to equal length so timingSafeEqual does not throw.
+    const keyBuf = Buffer.from(releaseApiKey, 'utf8');
+    const providedBuf = Buffer.alloc(keyBuf.length);
+    Buffer.from(provided, 'utf8').copy(providedBuf);
+
+    const lengthMatch = Buffer.from(provided, 'utf8').length === keyBuf.length;
+    const valueMatch = timingSafeEqual(keyBuf, providedBuf);
+
+    if (!lengthMatch || !valueMatch) {
       res.status(401).json({ error: 'Unauthorized' });
       return true;
     }
@@ -991,9 +1020,18 @@ function verifyOnChainRecord(
 export function createEscrowRouterFromEnv(network: StellarNetwork, releaseApiKey?: string): Router {
   const contractId = process.env['ESCROW_CONTRACT_ID'];
   const rpcUrl = process.env['SOROBAN_RPC_URL'] ?? SOROBAN_RPC_URLS[network];
+  const isProd = process.env['NODE_ENV'] === 'production';
 
   if (!contractId) {
     console.warn('[escrow] ESCROW_CONTRACT_ID is not set. Escrow routes will return 503.');
+  }
+
+  if (isProd && !releaseApiKey) {
+    console.warn(
+      '[escrow] WARNING: RELEASE_API_KEY is not set in production. ' +
+      'Release and refund endpoints will return 503 until it is configured. ' +
+      'Set the RELEASE_API_KEY environment variable.',
+    );
   }
 
   return createEscrowRouter({

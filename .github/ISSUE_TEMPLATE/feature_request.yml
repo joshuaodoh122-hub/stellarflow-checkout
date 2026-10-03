@@ -1,0 +1,58 @@
+name: Feature request
+description: Suggest a new feature or improvement for StellarFlow Checkout
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for suggesting an improvement.
+        Before opening, check [CONTRIBUTING.md](../../CONTRIBUTING.md) for good first issues
+        and roadmap ideas that are already planned.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the use-case or limitation this feature addresses.
+      placeholder: "As a merchant, I need X because..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: Describe what you'd like to happen, at any level of detail.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any alternative approaches you've considered or tried.
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Which package does this affect?
+      options:
+        - "@stellarflow/core"
+        - "@stellarflow/server"
+        - "@stellarflow/widget"
+        - "@stellarflow/demo"
+        - "contracts/escrow (Rust/Soroban)"
+        - "Documentation / CI"
+        - "Multiple / unsure"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have searched existing issues and this is not a duplicate.
+          required: true
+        - label: This feature maintains the non-custodial invariant (server never holds keys).
+          required: true
