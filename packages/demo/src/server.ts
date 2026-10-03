@@ -38,9 +38,17 @@ import {
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 const NETWORK = (process.env.STELLAR_NETWORK ?? 'testnet') as StellarNetwork;
-const MERCHANT_ADDRESS =
-  process.env.MERCHANT_ADDRESS ??
-  'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
+const MERCHANT_ADDRESS_RAW = process.env.MERCHANT_ADDRESS ?? '';
+// Fail fast if the placeholder from .env.example was accidentally used.
+const PLACEHOLDER_PREFIX = 'GXXXXXXXXXXXXXXXXXXXX';
+if (!MERCHANT_ADDRESS_RAW || MERCHANT_ADDRESS_RAW.startsWith(PLACEHOLDER_PREFIX)) {
+  console.error(
+    'ERROR: MERCHANT_ADDRESS is not set or is still the placeholder from .env.example.\n' +
+    '  Set a real funded Stellar address in packages/demo/.env before starting the server.',
+  );
+  process.exit(1);
+}
+const MERCHANT_ADDRESS = MERCHANT_ADDRESS_RAW;
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const ORIGIN_DOMAIN = process.env.ORIGIN_DOMAIN ?? `localhost:${PORT}`;
 const QUOTE_TTL_MS = parseInt(process.env.QUOTE_TTL_MS ?? '180000', 10);
