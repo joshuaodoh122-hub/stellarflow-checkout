@@ -113,6 +113,57 @@ After the deposit transaction confirms on-chain, `getEscrow()` is called and the
 
 ---
 
+## Security model and limitations
+
+Truthfully, from the code (see [SECURITY.md](SECURITY.md) for the full design):
+
+- **Non-custodial.** The server holds no private key and has no signing
+  authority in either mode. Classic: funds go customer → merchant directly.
+  Escrow: funds are held on-chain by the contract; the server only builds
+  unsigned XDR and submits wallet-signed XDR (`packages/server/src/escrow-session.ts`,
+  `packages/server/src/checkout-router.ts`).
+- **In-memory session store.** The default `InMemorySessionStore`
+  (`packages/server/src/session-manager.ts`) loses all session state on
+  restart. On-chain escrow funds stay safe — the contract holds them — but the
+  server forgets the sessions; reconcile with `GET /api/escrow/:orderId`. A
+  persistent store is a roadmap item, not implemented.
+- **One token per escrow session, pinned by the server.** Each escrow session
+  fixes one SAC token at creation and the server rejects a deposit whose token
+  differs (`escrow-router.ts` XDR validation, arg[3]). The contract itself has
+  **no token whitelist** — it accepts any SAC address — so the server-side pin
+  is the token protection, not the contract. A malicious token could misreport
+  a transfer; see [`contracts/escrow/README.md`](contracts/escrow/README.md).
+- **No arbitration, no partial refund/release.** `release` sends the full
+  amount to the merchant; `refund` returns the full amount to the payer. There
+  is no third-party arbiter and no partial path.
+- **Payer-chosen timeout, validated by the server.** The depositor picks
+  `timeout_ledgers`; the server requires it in `[1, 6307200]` when supplied
+  (`escrow-router.ts`), and the contract rejects values above
+  `MAX_TIMEOUT_LEDGERS`. The payer may self-refund only after
+  `deposited_at + timeout_ledgers`.
+- **CORS.** The demo server uses `cors({ origin: CORS_ORIGIN })` where
+  `CORS_ORIGIN` defaults to `false` (same-origin; cross-origin requests are
+  refused unless `CORS_ORIGIN` is set) (`packages/demo/src/server.ts`).
+- **Rate limiting.** `express-rate-limit` applies 60 requests/minute per IP to
+  all `/api` routes (`packages/demo/src/server.ts`). Tune for production.
+- **`/api/sessions` guard.** `GET /api/sessions` is open by default; when
+  `SESSIONS_API_KEY` is set it requires `Authorization: Bearer <key>`
+  (`checkout-router.ts`). It is a demo/dashboard convenience — leave the key
+  unset only in local dev.
+- **Release/refund write endpoints.** `POST /api/escrow/:id/release[/submit]`
+  require a Bearer `RELEASE_API_KEY`, compared with `crypto.timingSafeEqual`;
+  production returns 503 if the key is unset (`escrow-router.ts`, SECURITY.md).
+- **Price quotes depend on CoinGecko.** The default `CoinGeckoPriceSource`
+  fetches XLM/USDC prices from the CoinGecko free API with a 3-minute TTL
+  (`DEFAULT_QUOTE_TTL_MS` in `packages/core/src/price-quote.ts`). This is an
+  external dependency; swapping in a different `PriceSource` (e.g. an on-chain
+  oracle) is a roadmap item.
+- **Unaudited.** Neither the server nor the escrow contract has been
+  professionally audited. Testnet is the default; mainnet is opt-in with a
+  startup warning. Use at your own risk.
+
+---
+
 ## How to run the testnet proof
 
 ```bash

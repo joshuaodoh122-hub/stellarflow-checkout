@@ -12,6 +12,61 @@ checklist.
 
 ## [Unreleased]
 
+### 2026-11-22 — docs/honest-docs-and-claims-audit (Task 2: security model and limitations)
+
+**Changes:**
+- `README.md`: added a "Security model and limitations" section listing, with
+  the implementing file for each item: non-custodial invariant
+  (`escrow-session.ts`, `checkout-router.ts`); in-memory session store
+  (`session-manager.ts`) loses state on restart but on-chain funds stay safe;
+  one token per escrow session pinned by the server with no contract token
+  whitelist (`escrow-router.ts` arg[3], `contracts/escrow/README.md`); no
+  arbitration and no partial refund/release; payer-chosen timeout validated by
+  the server (`escrow-router.ts`, `[1, 6307200]`) and the contract's
+  `MAX_TIMEOUT_LEDGERS`; CORS (`cors({ origin: CORS_ORIGIN })`, default `false`
+  = same-origin, in `packages/demo/src/server.ts`); rate limiting (60 req/min
+  per IP on all `/api` routes, `packages/demo/src/server.ts`); the optional
+  `SESSIONS_API_KEY` Bearer guard on `GET /api/sessions` (`checkout-router.ts`);
+  `RELEASE_API_KEY` with `crypto.timingSafeEqual` and 503 in production
+  (`escrow-router.ts`); CoinGecko price dependency with 3-minute TTL
+  (`DEFAULT_QUOTE_TTL_MS` in `packages/core/src/price-quote.ts`); and
+  "unaudited".
+- Checked each item against `SECURITY.md`: no contradictions found, so
+  `SECURITY.md` was not changed. (SECURITY.md is silent on the `/api/sessions`
+  guard, the CORS default and "unaudited"; its rate-limit note is consistent
+  with the code — the escrow routes are a subset of the `/api` limiter.)
+
+**Why:** The README's security/limitations facts were spread across the
+"Escrow trust model", "Known limitations" and SECURITY.md, and several
+behaviours (CORS default, the `/api/sessions` guard, the CoinGecko dependency,
+"unaudited") were not stated at all. One consolidated section, each item tied
+to its code location, makes the security posture auditable.
+
+**Tests:**
+```
+npm run lint        ✅ exit 0 (run 2026-11-22)
+npm run typecheck   ✅ exit 0 (run 2026-11-22)
+npm test -- --forceExit   ✅ 364 passed, 15 suites (run 2026-11-22)
+( cd contracts/escrow && cargo fmt --check )   ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
+    cargo clippy --locked --target wasm32v1-none -- -D warnings )  ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && cargo test --locked )  ✅ 35 passed, 0 failed (run 2026-11-22)
+```
+Each cited file/function was confirmed by reading the source:
+`InMemorySessionStore` in `session-manager.ts`; `CoinGeckoPriceSource` and
+`DEFAULT_QUOTE_TTL_MS = 3 * 60 * 1000` in `price-quote.ts`; `timingSafeEqual`
+and 503 in `escrow-router.ts`; `cors({ origin: CORS_ORIGIN })` with default
+`false` and `rateLimit({ windowMs: 60000, max: 60 })` on `/api` in
+`packages/demo/src/server.ts`; the `SESSIONS_API_KEY` Bearer guard in
+`checkout-router.ts`.
+
+**Limits:** This is documentation; the test suites do not assert README text.
+The behaviours are as implemented in the demo/server today; a production
+deployment may differ (different rate limits, a persistent store, a different
+`PriceSource`). The section does not change any code.
+
+---
+
 ### 2026-11-22 — docs/honest-docs-and-claims-audit (Task 1: README accuracy)
 
 **Changes:**
