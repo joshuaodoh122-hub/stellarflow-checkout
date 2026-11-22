@@ -12,6 +12,57 @@ checklist.
 
 ## [Unreleased]
 
+### 2026-11-22 — fix/escrow-contract-hardening (Task 3: storage TTL)
+
+**Changes:**
+- `contracts/escrow/src/lib.rs`:
+  - New constants `TTL_THRESHOLD = 3_153_600` (MAX_TIMEOUT_LEDGERS / 2) and
+    `TTL_EXTEND_TO = 12_614_400` (2 × MAX_TIMEOUT_LEDGERS, ≈ 2 years at 5 s/ledger).
+  - New private helper `bump_ttl(env, key)` that extends the persistent entry TTL
+    to `min(TTL_EXTEND_TO, env.storage().max_ttl())` when the remaining TTL is below
+    `min(TTL_THRESHOLD, extend_to)`.
+  - `deposit()`, `release()`, `refund()`: each calls `bump_ttl` after writing state.
+  - New public function `extend_escrow_ttl(env, order_id) -> Result<(), EscrowError>`:
+    callable by anyone (no auth), returns `NotFound` if no entry exists, extends TTL
+    otherwise. Documented as not automatic — callers or keeper bots must invoke it.
+  - `contracts/escrow/src/lib.rs`: also fixed trailing whitespace on line 1 (fmt) and
+    simplified redundant `timeout_ledgers > 0 &&` guard to `timeout_ledgers > MAX_TIMEOUT_LEDGERS`
+    (the `> 0` check was redundant since `MAX_TIMEOUT_LEDGERS > 0`; clippy caught this).
+  - Three new tests: `test_deposit_sets_ttl`, `test_extend_escrow_ttl_increases_ttl`,
+    `test_extend_escrow_ttl_not_found`. TTL is read using `soroban_sdk::testutils::storage::Persistent`
+    trait (must be in scope via `use soroban_sdk::testutils::storage::Persistent as _`).
+
+**Why:** Persistent storage entries on Stellar/Soroban expire if their TTL is not
+extended. Without TTL management, a held escrow's on-chain record could be archived
+by the network before the payer's refund window elapses, locking funds until the
+entry is manually restored. The TTL_EXTEND_TO constant (≈ 2 years) ensures a held
+escrow at maximum timeout has adequate TTL headroom. `extend_escrow_ttl` lets payers
+or keeper bots extend TTL without changing state.
+
+**Tests:**
+```
+cargo fmt --check        ✅ exit 0 (run 2026-11-22)
+SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1
+cargo clippy --target wasm32v1-none -- -D warnings
+                         ✅ exit 0 (run 2026-11-22)
+cargo test               ✅ 26 passed, 0 failed (run 2026-11-22)
+npm run lint             — not re-run; no TS files changed
+npm run typecheck        — not re-run; no TS files changed
+npm test                 — not re-run; no TS files changed
+```
+
+Note: `cargo clippy --target wasm32v1-none` requires the env var
+`SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1` because soroban-sdk 28.0.0's
+build script checks for stellar-cli v25.2.0+; the env var satisfies that check.
+
+**Limits:** TTL tests use the testutils `get_ttl` helper, which returns the TTL set
+by the last `extend_ttl` call in the test environment (not a real ledger countdown).
+The tests confirm the TTL is at least `TTL_THRESHOLD` after operations and does not
+decrease after `extend_escrow_ttl`. They cannot prove the network will honour the TTL
+or that the keeper-bot use case works end-to-end.
+
+---
+
 ### 2026-11-22 — fix/escrow-contract-hardening
 
 **Changes:**
