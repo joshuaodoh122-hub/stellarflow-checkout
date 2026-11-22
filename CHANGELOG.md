@@ -12,6 +12,38 @@ checklist.
 
 ## [Unreleased]
 
+### 2026-11-22 — fix/escrow-contract-hardening (Task 6: escrow README)
+
+**Changes:**
+- `contracts/escrow/README.md`: new file. Covers:
+  - No token whitelist (and what actually provides the protection: server-side token pinning).
+  - Timeout chosen by depositor; server must validate.
+  - No arbitration or partial refund.
+  - TTL not automatic; callers or keeper bots must call `extend_escrow_ttl`.
+  - Unaudited status.
+  - Function table with auth requirements, errors and events.
+  - Error code table (codes 1–10).
+  - Events table (topics and data fields).
+  - Constants table.
+  - State machine diagram.
+  - Build instructions including the `SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1`
+    env var required for direct `cargo` invocations.
+  - Comparison with classic Horizon checkout.
+
+**Why:** Without a README, the contract's security assumptions and operational requirements
+(especially the token whitelist caveat and the TTL keeper requirement) are only in source
+comments and would not be visible to a developer deploying or integrating the contract.
+
+**Tests:**
+```
+No code changed — no Rust tests to run.
+```
+
+**Limits:** The README describes design intent and known limitations. It cannot be
+automatically verified as accurate if the contract code changes without updating it.
+
+---
+
 ### 2026-11-22 — fix/escrow-contract-hardening (Task 5: auth tests without blanket mocks)
 
 **Changes:**
