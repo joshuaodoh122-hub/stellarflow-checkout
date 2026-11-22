@@ -174,7 +174,7 @@ export interface SorobanRpcClient {
    * Returns the decoded return value.
    * Used by getEscrow() — free, no fee, no signature.
    *
-   * Contract errors (codes 1–7) detected in the simulation error string are
+   * Contract errors (codes 1–10) detected in the simulation error string are
    * mapped to EscrowClientError so callers can handle them specifically.
    */
   simulateContract(params: {
@@ -287,7 +287,7 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
    * Simulate a read-only contract call (no auth, no fee).
    * Used for get_escrow reads.
    *
-   * Contract errors (codes 1–7) found in the simulation error are surfaced
+   * Contract errors (codes 1–10) found in the simulation error are surfaced
    * as EscrowClientError so callers (e.g. GET /api/escrow/:id) can handle
    * NotFound specifically rather than treating all failures the same.
    */
@@ -613,7 +613,7 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
   }
 
   /**
-   * Attempt to extract a contract error code (1–7) from a simulation error string.
+   * Attempt to extract a contract error code (1–10) from a simulation error string.
    * Returns null if no code can be identified.
    *
    * Soroban simulation errors typically contain "Error(Contract, #N)".
@@ -628,7 +628,7 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
       const match = errorStr.match(pattern);
       if (match) {
         const code = parseInt(match[1]!, 10);
-        if (code >= 1 && code <= 7) return code;
+        if (code >= 1 && code <= 10) return code;
       }
     }
     return null;
@@ -756,6 +756,10 @@ export const ESCROW_ERROR_CODES = {
   NotMerchant: 5,
   NotAuthorized: 6,
   TimeoutNotElapsed: 7,
+  // deposit() input validation (escrow contract hardening):
+  InvalidAmount: 8,
+  SameParty: 9,
+  TimeoutTooLong: 10,
 } as const;
 
 export type EscrowErrorCode = (typeof ESCROW_ERROR_CODES)[keyof typeof ESCROW_ERROR_CODES];

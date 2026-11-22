@@ -284,6 +284,15 @@ describe('POST /api/escrow', () => {
     expect(res.body.error).toMatch(/merchantAddress/);
   });
 
+  it('400 when payerAddress equals merchantAddress (self-escrow)', async () => {
+    const { app } = makeApp();
+    const res = await request(app).post('/api/escrow').send({
+      payerAddress: PAYER, merchantAddress: PAYER, tokenContractId: TOKEN_ID, amount: AMOUNT,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/same address/i);
+  });
+
   it('400 when tokenContractId is a G... key not a C...', async () => {
     const { app } = makeApp();
     const res = await request(app).post('/api/escrow').send({
@@ -1238,5 +1247,51 @@ describe('Error mapping', () => {
       payerAddress: PAYER, merchantAddress: MERCHANT, tokenContractId: TOKEN_ID, amount: AMOUNT,
     });
     expect(res.status).toBe(502);
+  });
+});
+
+// ─── New contract error codes (8, 9, 10) map to 400 ──────────────────────────
+
+describe('New contract error codes (8, 9, 10) map to 400', () => {
+  it('EscrowClientError(InvalidAmount) from buildUnsignedContractTx → 400', async () => {
+    const rpc = createMockRpc({
+      buildUnsignedContractTx: jest.fn().mockRejectedValue(
+        new EscrowClientError('deposit', ESCROW_ERROR_CODES.InvalidAmount)
+      ),
+    });
+    const { app } = makeApp({}, rpc);
+    const res = await request(app).post('/api/escrow').send({
+      payerAddress: PAYER, merchantAddress: MERCHANT, tokenContractId: TOKEN_ID, amount: AMOUNT,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('InvalidAmount');
+  });
+
+  it('EscrowClientError(SameParty) from buildUnsignedContractTx → 400', async () => {
+    const rpc = createMockRpc({
+      buildUnsignedContractTx: jest.fn().mockRejectedValue(
+        new EscrowClientError('deposit', ESCROW_ERROR_CODES.SameParty)
+      ),
+    });
+    const { app } = makeApp({}, rpc);
+    const res = await request(app).post('/api/escrow').send({
+      payerAddress: PAYER, merchantAddress: MERCHANT, tokenContractId: TOKEN_ID, amount: AMOUNT,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('SameParty');
+  });
+
+  it('EscrowClientError(TimeoutTooLong) from buildUnsignedContractTx → 400', async () => {
+    const rpc = createMockRpc({
+      buildUnsignedContractTx: jest.fn().mockRejectedValue(
+        new EscrowClientError('deposit', ESCROW_ERROR_CODES.TimeoutTooLong)
+      ),
+    });
+    const { app } = makeApp({}, rpc);
+    const res = await request(app).post('/api/escrow').send({
+      payerAddress: PAYER, merchantAddress: MERCHANT, tokenContractId: TOKEN_ID, amount: AMOUNT,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('TimeoutTooLong');
   });
 });

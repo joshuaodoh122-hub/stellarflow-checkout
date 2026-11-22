@@ -617,6 +617,12 @@ describe('EscrowClientError', () => {
       expect(err.codeName).toBe(name);
     }
   });
+
+  it('new deposit-validation error codes (8, 9, 10) map to the expected names', () => {
+    expect(new EscrowClientError('deposit', ESCROW_ERROR_CODES.InvalidAmount).codeName).toBe('InvalidAmount');
+    expect(new EscrowClientError('deposit', ESCROW_ERROR_CODES.SameParty).codeName).toBe('SameParty');
+    expect(new EscrowClientError('deposit', ESCROW_ERROR_CODES.TimeoutTooLong).codeName).toBe('TimeoutTooLong');
+  });
 });
 
 // ─── Network configuration ────────────────────────────────────────────────────

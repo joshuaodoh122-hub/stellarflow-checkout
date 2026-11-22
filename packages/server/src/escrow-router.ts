@@ -218,6 +218,8 @@ export function createEscrowRouter(opts: EscrowRouterOptions): Router {
     if (err instanceof EscrowClientError) {
       const statusMap: Record<number, number> = {
         1: 409, 2: 404, 3: 409, 4: 409, 5: 403, 6: 403, 7: 409,
+        // deposit input-validation errors (escrow contract hardening):
+        8: 400, 9: 400, 10: 400,
       };
       res.status(statusMap[err.code] ?? 400).json({
         error: `Contract error: ${err.codeName} (code ${err.code})`,
@@ -254,6 +256,13 @@ export function createEscrowRouter(opts: EscrowRouterOptions): Router {
       }
       if (typeof merchantAddress !== 'string' || !StrKey.isValidEd25519PublicKey(merchantAddress)) {
         res.status(400).json({ error: 'merchantAddress must be a valid Stellar public key (G...)' });
+        return;
+      }
+      // Reject self-escrow: payer and merchant must be different addresses.
+      // The contract also rejects this with SameParty (code 9); validate early
+      // so the session is never created and no XDR is built.
+      if (payerAddress === merchantAddress) {
+        res.status(400).json({ error: 'payerAddress and merchantAddress must not be the same address' });
         return;
       }
       if (typeof tokenContractId !== 'string' || !StrKey.isValidContract(tokenContractId)) {

@@ -12,6 +12,76 @@ checklist.
 
 ## [Unreleased]
 
+### 2026-11-22 — fix/escrow-contract-hardening (Task 7: TypeScript alignment)
+
+**Changes:**
+- `packages/server/src/escrow-session.ts`:
+  - `ESCROW_ERROR_CODES`: added `InvalidAmount = 8`, `SameParty = 9`,
+    `TimeoutTooLong = 10` — the three `deposit()` validation errors the
+    contract gained in Task 1.
+  - `HttpSorobanRpcClient._extractContractErrorCode`: now recognises codes 1–10
+    (was 1–7), so a simulation error carrying one of the new codes surfaces as
+    an `EscrowClientError` with the correct code instead of falling through to
+    a generic `SIMULATION_FAILED`.
+  - Two doc comments ("Contract errors (codes 1–7)") updated to 1–10 (the
+    `simulateContract` interface and implementation comments).
+- `packages/server/src/escrow-router.ts`:
+  - `handleEscrowError` `statusMap`: added `8: 400, 9: 400, 10: 400`, so the
+    new validation errors map to HTTP 400 rather than the fallback.
+  - `POST /api/escrow`: rejects `payerAddress === merchantAddress` with a clear
+    400 ("payerAddress and merchantAddress must not be the same address")
+    before a session is created or any XDR is built. `amount <= 0` and a
+    timeout above `MAX_TIMEOUT_LEDGERS` were already rejected; the router's
+    `MAX_TIMEOUT_LEDGERS` (6_307_200) equals the contract's constant.
+- Tests:
+  - `packages/server/src/__tests__/escrow-router.test.ts`: new test
+    `400 when payerAddress equals merchantAddress (self-escrow)`; new describe
+    block `New contract error codes (8, 9, 10) map to 400` with one test per code
+    (asserts HTTP 400 and `body.code` name).
+  - `packages/server/src/__tests__/escrow-session.test.ts`: new test asserting
+    the three new codes map to the expected `codeName` (the existing
+    "all defined error codes have readable names" loop now also covers them).
+  - `packages/server/src/__tests__/http-soroban-rpc-client.test.ts`: new tests
+    mapping `Error(Contract, #8/#9/#10)` in a simulation error to the
+    corresponding `EscrowClientError`.
+
+**Why:** The contract gained error codes 8–10 in Task 1, but the TypeScript
+layer only knew codes 1–7. `_extractContractErrorCode` dropped the new codes,
+so a real `InvalidAmount`/`SameParty`/`TimeoutTooLong` from simulation would
+have been reported as a generic `SIMULATION_FAILED`, and the router's
+`statusMap` had no entry for them. The server also did not reject
+`payer == merchant` at session creation, relying solely on the contract;
+rejecting earlier avoids creating a session and building an XDR the contract
+would reject. Mapping all contract error codes in TS keeps the two layers in
+sync and gives clients specific, actionable errors.
+
+**Tests:**
+```
+cargo fmt --manifest-path contracts/escrow/Cargo.toml -- --check
+  ✅ exit 0 (run 2026-11-22)
+SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
+  cargo clippy --manifest-path contracts/escrow/Cargo.toml --target wasm32v1-none -- -D warnings
+  ✅ exit 0 (run 2026-11-22)
+cargo test --manifest-path contracts/escrow/Cargo.toml
+  ✅ 35 passed, 0 failed (run 2026-11-22)
+npm run lint        ✅ exit 0 (run 2026-11-22)
+npm run typecheck   ✅ exit 0 (run 2026-11-22)
+npm test -- --forceExit   ✅ 364 passed, 15 suites (run 2026-11-22)
+```
+`--forceExit` is used because Jest does not exit on its own (an open handle in
+the widget test suite); it does not change which tests run or their results.
+A pre-existing `console.error` trace from the widget test is logged by a test
+that exercises an error path and still passes.
+
+**Limits:** The TS tests use mocked RPC clients; they prove the error-code
+mapping and the router's request validation, not that a live Soroban RPC node
+returns these error strings. `_extractContractErrorCode` relies on the
+`Error(Contract, #N)` pattern (the current Soroban simulation error format);
+if that format changes the mapping would need updating. This task does not
+change the contract; the 35 Rust tests are unchanged from Task 6.
+
+---
+
 ### 2026-11-22 — fix/escrow-contract-hardening (Task 6: escrow README)
 
 **Changes:**
