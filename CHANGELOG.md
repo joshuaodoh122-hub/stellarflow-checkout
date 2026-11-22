@@ -12,6 +12,55 @@ checklist.
 
 ## [Unreleased]
 
+### 2026-11-22 — docs/honest-docs-and-claims-audit (Task 6: claims audit)
+
+**Changes:**
+- `docs/claims-audit.md` (new): 80-row table auditing behavioural claims from
+  README.md, ARCHITECTURE.md (escrow and checkout sections), SECURITY.md,
+  `contracts/escrow/README.md`, CONTRIBUTING.md, and `docs/good-first-issues.md`.
+  Columns: claim, source file and section, implementing function/file, test name
+  (backtick-quoted for automatic verification), status (VERIFIED / REWORDED /
+  REMOVED). Every VERIFIED row has a backtick-quoted test name that
+  `check_claims.sh` confirms exists.  Rows that cannot be backed by an automated
+  test are marked REWORDED (rate limiting, CORS, CI workflow checks, CI
+  instructions, audit status).
+- `scripts/check_claims.sh` (new): bash script that reads `docs/claims-audit.md`,
+  validates all status values, extracts backtick-quoted test names from VERIFIED
+  rows, and checks each one exists as either a Rust `fn <name>(` or a Jest
+  `it('<name>'...)` title string.  Exits 1 if any check fails.
+  Broken-copy proof: injecting a row with `\`this_test_does_not_exist\`` (VERIFIED)
+  and a row with status `INVALID_STATUS` produced:
+  ```
+  FAIL: Row 1: VERIFIED test not found: 'this_test_does_not_exist'
+  FAIL: Row 2: status 'INVALID_STATUS' is not VERIFIED, REWORDED, or REMOVED
+  check_claims.sh: 2 error(s) found in docs/claims-audit.md
+  ```
+
+**Why:** No single document listed the behavioural claims across all docs with
+their backing tests. Without this, a claim can drift from the code silently.
+The checker proves a named test exists; it does not prove the test covers the
+claim — that is documented in every row's explanatory text.
+
+**Tests:**
+```
+bash scripts/check_claims.sh
+  ✅ 80 rows checked, all OK (run 2026-11-22)
+
+npm run lint        ✅ exit 0 (run 2026-11-22)
+npm run typecheck   ✅ exit 0 (run 2026-11-22)
+npm test -- --forceExit   ✅ 365 passed, 16 suites (run 2026-11-22)
+( cd contracts/escrow && cargo fmt --check )   ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
+    cargo clippy --locked --target wasm32v1-none -- -D warnings )  ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && cargo test --locked )  ✅ 35 passed, 0 failed (run 2026-11-22)
+```
+
+**Limits:** `check_claims.sh` proves a test with the given name exists; it does
+not run the test or prove the test asserts the claim. Rows marked REWORDED have
+no automated check — they are verified by code reading only.
+
+---
+
 ### 2026-11-22 — docs/honest-docs-and-claims-audit (Task 5: timeout constant drift guard)
 
 **Changes:**
