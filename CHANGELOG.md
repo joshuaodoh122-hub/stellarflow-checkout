@@ -12,6 +12,78 @@ checklist.
 
 ## [Unreleased]
 
+### 2026-11-22 — fix/escrow-contract-hardening (Task 8: contract CI --locked)
+
+**Changes:**
+- `.github/workflows/contracts.yml`:
+  - `cargo test` → `cargo test --locked`
+  - `cargo clippy --target wasm32v1-none -- -D warnings` →
+    `cargo clippy --locked --target wasm32v1-none -- -D warnings`
+  - `cargo build --target wasm32v1-none --release` →
+    `cargo build --locked --target wasm32v1-none --release`
+  - `cargo fmt --check` left unchanged (fmt does not resolve dependencies).
+  - Tool versions unchanged (Rust stable via `dtolnay/rust-toolchain`,
+    stellar-cli v28.1.0). The `SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2:
+    "true"` env on the clippy and build steps is unchanged.
+  - No extra `cargo test` step added: the existing native
+    `cargo test --locked` already covers the non-release test cheaply
+    (~1.6s locally), so a duplicate would be redundant.
+
+**Why:** `--locked` makes CI fail if `Cargo.lock` is out of sync with
+`Cargo.toml`, so a dependency-resolution change cannot be silently applied by
+the CI build. This keeps CI builds reproducible and bound to the published
+lockfile. The stellar-cli install step is required because soroban-sdk 28.0.0's
+build script exits with "soroban-sdk requires stellar-cli v25.2.0+ to build a
+contract" on any wasm target unless `SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2`
+is set (which stellar-cli sets, and which the workflow sets directly for the
+clippy and build steps).
+
+**Verification of the stellar-cli download URL:**
+The workflow downloads
+`https://github.com/stellar/stellar-cli/releases/download/v28.1.0/stellar-cli-28.1.0-x86_64-unknown-linux-gnu.tar.gz`.
+This was verified, not guessed: querying the GitHub releases API
+(`https://api.github.com/repos/stellar/stellar-cli/releases/tags/v28.1.0`)
+returns the asset `stellar-cli-28.1.0-x86_64-unknown-linux-gnu.tar.gz`, and the
+"Install stellar-cli" step passed (✓) in branch CI run 45006866812 and main CI
+run 37113741276. The URL pattern and version are confirmed correct.
+
+**Tests:**
+```
+cargo fmt --manifest-path contracts/escrow/Cargo.toml -- --check
+  ✅ exit 0 (run 2026-11-22)
+SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
+  cargo clippy --manifest-path contracts/escrow/Cargo.toml --locked --target wasm32v1-none -- -D warnings
+  ✅ exit 0 (run 2026-11-22)
+cargo test --manifest-path contracts/escrow/Cargo.toml --locked
+  ✅ 35 passed, 0 failed (run 2026-11-22)
+SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
+  cargo build --manifest-path contracts/escrow/Cargo.toml --locked --target wasm32v1-none --release
+  ✅ exit 0, finished in 54.41s (run 2026-11-22)
+npm run lint        ✅ exit 0 (run 2026-11-22)
+npm run typecheck   ✅ exit 0 (run 2026-11-22)
+npm test -- --forceExit   ✅ 364 passed, 15 suites (run 2026-11-22)
+```
+
+**CI conclusions (via `gh`):**
+- `main`: latest Contracts CI run is 37113741276 (2026-10-03), conclusion
+  **failure** — failed at `cargo fmt --check` (the `lib.rs` line-1 trailing
+  whitespace this branch fixes in Task 3). The "Install stellar-cli" step
+  passed. No newer main run exists because recent main pushes (including the
+  Task 0 merge) do not touch `contracts/**` and so do not trigger this workflow.
+- `fix/escrow-contract-hardening`: latest run before this commit was
+  45006866812 (2026-11-22, tasks 3-6), conclusion **success** (fmt, clippy,
+  test, wasm build all ✓ in 1m57s).
+
+**Limits:** The `--locked` cargo commands were run locally with the same
+toolchain (Rust 1.100.0, `wasm32v1-none` target); the actual GitHub Actions run
+for this commit was not observed from this environment, so local runs cannot
+prove the runner's cache behaviour or that `--locked` behaves identically on
+the runner — only that `Cargo.lock` is consistent with `Cargo.toml` here. The
+stellar-cli URL was verified by the GitHub releases API and by prior successful
+CI runs, not by downloading the binary in this environment.
+
+---
+
 ### 2026-11-22 — fix/escrow-contract-hardening (Task 7: TypeScript alignment)
 
 **Changes:**
