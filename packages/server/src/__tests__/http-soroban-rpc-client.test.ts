@@ -287,6 +287,33 @@ describe('HttpSorobanRpcClient.buildUnsignedContractTx()', () => {
       client.buildUnsignedContractTx({ contractId: CONTRACT_ID, method: 'refund', args: [ORDER_ID_HEX, PAYER], callerAddress: PAYER }),
     ).rejects.toMatchObject({ code: ESCROW_ERROR_CODES.TimeoutNotElapsed, codeName: 'TimeoutNotElapsed' });
   });
+
+  it('maps Error(Contract, #8) to EscrowClientError(InvalidAmount)', async () => {
+    mockServerMethods.getAccount.mockResolvedValue(new Account(PAYER, '100'));
+    mockServerMethods.simulateTransaction.mockResolvedValue(makeSimError('HostError: Error(Contract, #8)'));
+
+    await expect(
+      client.buildUnsignedContractTx({ contractId: CONTRACT_ID, method: 'deposit', args: [PAYER, PAYER, 0n, CONTRACT_ID, ORDER_ID_HEX, 0], callerAddress: PAYER }),
+    ).rejects.toMatchObject({ code: ESCROW_ERROR_CODES.InvalidAmount, codeName: 'InvalidAmount' });
+  });
+
+  it('maps Error(Contract, #9) to EscrowClientError(SameParty)', async () => {
+    mockServerMethods.getAccount.mockResolvedValue(new Account(PAYER, '100'));
+    mockServerMethods.simulateTransaction.mockResolvedValue(makeSimError('HostError: Error(Contract, #9)'));
+
+    await expect(
+      client.buildUnsignedContractTx({ contractId: CONTRACT_ID, method: 'deposit', args: [PAYER, PAYER, 100n, CONTRACT_ID, ORDER_ID_HEX, 0], callerAddress: PAYER }),
+    ).rejects.toMatchObject({ code: ESCROW_ERROR_CODES.SameParty, codeName: 'SameParty' });
+  });
+
+  it('maps Error(Contract, #10) to EscrowClientError(TimeoutTooLong)', async () => {
+    mockServerMethods.getAccount.mockResolvedValue(new Account(PAYER, '100'));
+    mockServerMethods.simulateTransaction.mockResolvedValue(makeSimError('HostError: Error(Contract, #10)'));
+
+    await expect(
+      client.buildUnsignedContractTx({ contractId: CONTRACT_ID, method: 'deposit', args: [PAYER, PAYER, 100n, CONTRACT_ID, ORDER_ID_HEX, 999_999_999], callerAddress: PAYER }),
+    ).rejects.toMatchObject({ code: ESCROW_ERROR_CODES.TimeoutTooLong, codeName: 'TimeoutTooLong' });
+  });
 });
 
 // ─── submitSignedTx ───────────────────────────────────────────────────────────

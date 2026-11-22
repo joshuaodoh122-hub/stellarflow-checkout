@@ -74,19 +74,19 @@ jobs:
         working-directory: contracts/escrow
         env:
           SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2: "true"
-        run: cargo clippy --target wasm32v1-none -- -D warnings
+        run: cargo clippy --locked --target wasm32v1-none -- -D warnings
 
       # ── Unit tests (native target — testutils use std) ─────────────────────
       - name: cargo test
         working-directory: contracts/escrow
-        run: cargo test
+        run: cargo test --locked
 
       # ── WASM release build ─────────────────────────────────────────────────
       - name: cargo build --target wasm32v1-none --release
         working-directory: contracts/escrow
         env:
           SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2: "true"
-        run: cargo build --target wasm32v1-none --release
+        run: cargo build --locked --target wasm32v1-none --release
 
       # ── Upload WASM artifact ───────────────────────────────────────────────
       - name: Upload WASM artifact

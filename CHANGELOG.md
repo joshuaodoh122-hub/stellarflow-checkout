@@ -12,6 +12,148 @@ checklist.
 
 ## [Unreleased]
 
+### 2026-11-22 — fix/escrow-contract-hardening (Task 8: contract CI --locked)
+
+**Changes:**
+- `.github/workflows/contracts.yml`:
+  - `cargo test` → `cargo test --locked`
+  - `cargo clippy --target wasm32v1-none -- -D warnings` →
+    `cargo clippy --locked --target wasm32v1-none -- -D warnings`
+  - `cargo build --target wasm32v1-none --release` →
+    `cargo build --locked --target wasm32v1-none --release`
+  - `cargo fmt --check` left unchanged (fmt does not resolve dependencies).
+  - Tool versions unchanged (Rust stable via `dtolnay/rust-toolchain`,
+    stellar-cli v28.1.0). The `SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2:
+    "true"` env on the clippy and build steps is unchanged.
+  - No extra `cargo test` step added: the existing native
+    `cargo test --locked` already covers the non-release test cheaply
+    (~1.6s locally), so a duplicate would be redundant.
+
+**Why:** `--locked` makes CI fail if `Cargo.lock` is out of sync with
+`Cargo.toml`, so a dependency-resolution change cannot be silently applied by
+the CI build. This keeps CI builds reproducible and bound to the published
+lockfile. The stellar-cli install step is required because soroban-sdk 28.0.0's
+build script exits with "soroban-sdk requires stellar-cli v25.2.0+ to build a
+contract" on any wasm target unless `SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2`
+is set (which stellar-cli sets, and which the workflow sets directly for the
+clippy and build steps).
+
+**Verification of the stellar-cli download URL:**
+The workflow downloads
+`https://github.com/stellar/stellar-cli/releases/download/v28.1.0/stellar-cli-28.1.0-x86_64-unknown-linux-gnu.tar.gz`.
+This was verified, not guessed: querying the GitHub releases API
+(`https://api.github.com/repos/stellar/stellar-cli/releases/tags/v28.1.0`)
+returns the asset `stellar-cli-28.1.0-x86_64-unknown-linux-gnu.tar.gz`, and the
+"Install stellar-cli" step passed (✓) in branch CI run 45006866812 and main CI
+run 37113741276. The URL pattern and version are confirmed correct.
+
+**Tests:**
+```
+cargo fmt --manifest-path contracts/escrow/Cargo.toml -- --check
+  ✅ exit 0 (run 2026-11-22)
+SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
+  cargo clippy --manifest-path contracts/escrow/Cargo.toml --locked --target wasm32v1-none -- -D warnings
+  ✅ exit 0 (run 2026-11-22)
+cargo test --manifest-path contracts/escrow/Cargo.toml --locked
+  ✅ 35 passed, 0 failed (run 2026-11-22)
+SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
+  cargo build --manifest-path contracts/escrow/Cargo.toml --locked --target wasm32v1-none --release
+  ✅ exit 0, finished in 54.41s (run 2026-11-22)
+npm run lint        ✅ exit 0 (run 2026-11-22)
+npm run typecheck   ✅ exit 0 (run 2026-11-22)
+npm test -- --forceExit   ✅ 364 passed, 15 suites (run 2026-11-22)
+```
+
+**CI conclusions (via `gh`):**
+- `main`: latest Contracts CI run is 37113741276 (2026-10-03), conclusion
+  **failure** — failed at `cargo fmt --check` (the `lib.rs` line-1 trailing
+  whitespace this branch fixes in Task 3). The "Install stellar-cli" step
+  passed. No newer main run exists because recent main pushes (including the
+  Task 0 merge) do not touch `contracts/**` and so do not trigger this workflow.
+- `fix/escrow-contract-hardening`: latest run before this commit was
+  45006866812 (2026-11-22, tasks 3-6), conclusion **success** (fmt, clippy,
+  test, wasm build all ✓ in 1m57s).
+
+**Limits:** The `--locked` cargo commands were run locally with the same
+toolchain (Rust 1.100.0, `wasm32v1-none` target); the actual GitHub Actions run
+for this commit was not observed from this environment, so local runs cannot
+prove the runner's cache behaviour or that `--locked` behaves identically on
+the runner — only that `Cargo.lock` is consistent with `Cargo.toml` here. The
+stellar-cli URL was verified by the GitHub releases API and by prior successful
+CI runs, not by downloading the binary in this environment.
+
+---
+
+### 2026-11-22 — fix/escrow-contract-hardening (Task 7: TypeScript alignment)
+
+**Changes:**
+- `packages/server/src/escrow-session.ts`:
+  - `ESCROW_ERROR_CODES`: added `InvalidAmount = 8`, `SameParty = 9`,
+    `TimeoutTooLong = 10` — the three `deposit()` validation errors the
+    contract gained in Task 1.
+  - `HttpSorobanRpcClient._extractContractErrorCode`: now recognises codes 1–10
+    (was 1–7), so a simulation error carrying one of the new codes surfaces as
+    an `EscrowClientError` with the correct code instead of falling through to
+    a generic `SIMULATION_FAILED`.
+  - Two doc comments ("Contract errors (codes 1–7)") updated to 1–10 (the
+    `simulateContract` interface and implementation comments).
+- `packages/server/src/escrow-router.ts`:
+  - `handleEscrowError` `statusMap`: added `8: 400, 9: 400, 10: 400`, so the
+    new validation errors map to HTTP 400 rather than the fallback.
+  - `POST /api/escrow`: rejects `payerAddress === merchantAddress` with a clear
+    400 ("payerAddress and merchantAddress must not be the same address")
+    before a session is created or any XDR is built. `amount <= 0` and a
+    timeout above `MAX_TIMEOUT_LEDGERS` were already rejected; the router's
+    `MAX_TIMEOUT_LEDGERS` (6_307_200) equals the contract's constant.
+- Tests:
+  - `packages/server/src/__tests__/escrow-router.test.ts`: new test
+    `400 when payerAddress equals merchantAddress (self-escrow)`; new describe
+    block `New contract error codes (8, 9, 10) map to 400` with one test per code
+    (asserts HTTP 400 and `body.code` name).
+  - `packages/server/src/__tests__/escrow-session.test.ts`: new test asserting
+    the three new codes map to the expected `codeName` (the existing
+    "all defined error codes have readable names" loop now also covers them).
+  - `packages/server/src/__tests__/http-soroban-rpc-client.test.ts`: new tests
+    mapping `Error(Contract, #8/#9/#10)` in a simulation error to the
+    corresponding `EscrowClientError`.
+
+**Why:** The contract gained error codes 8–10 in Task 1, but the TypeScript
+layer only knew codes 1–7. `_extractContractErrorCode` dropped the new codes,
+so a real `InvalidAmount`/`SameParty`/`TimeoutTooLong` from simulation would
+have been reported as a generic `SIMULATION_FAILED`, and the router's
+`statusMap` had no entry for them. The server also did not reject
+`payer == merchant` at session creation, relying solely on the contract;
+rejecting earlier avoids creating a session and building an XDR the contract
+would reject. Mapping all contract error codes in TS keeps the two layers in
+sync and gives clients specific, actionable errors.
+
+**Tests:**
+```
+cargo fmt --manifest-path contracts/escrow/Cargo.toml -- --check
+  ✅ exit 0 (run 2026-11-22)
+SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
+  cargo clippy --manifest-path contracts/escrow/Cargo.toml --target wasm32v1-none -- -D warnings
+  ✅ exit 0 (run 2026-11-22)
+cargo test --manifest-path contracts/escrow/Cargo.toml
+  ✅ 35 passed, 0 failed (run 2026-11-22)
+npm run lint        ✅ exit 0 (run 2026-11-22)
+npm run typecheck   ✅ exit 0 (run 2026-11-22)
+npm test -- --forceExit   ✅ 364 passed, 15 suites (run 2026-11-22)
+```
+`--forceExit` is used because Jest does not exit on its own (an open handle in
+the widget test suite); it does not change which tests run or their results.
+A pre-existing `console.error` trace from the widget test is logged by a test
+that exercises an error path and still passes.
+
+**Limits:** The TS tests use mocked RPC clients; they prove the error-code
+mapping and the router's request validation, not that a live Soroban RPC node
+returns these error strings. `_extractContractErrorCode` relies on the
+`Error(Contract, #N)` pattern (the current Soroban simulation error format);
+if that format changes the mapping would need updating. This task does not
+change the contract; the 35 Rust tests are unchanged from Task 6.
+
+---
+
 ### 2026-11-22 — fix/escrow-contract-hardening (Task 6: escrow README)
 
 **Changes:**
