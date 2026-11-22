@@ -13,6 +13,15 @@
 -
 -
 
+## Changelog
+
+<!-- Every PR must add a dated, reasoned entry to CHANGELOG.md under ## [Unreleased]
+     as: ### YYYY-MM-DD — <branch name>
+     with sections: Changes (files and what), Why (the concrete defect or inaccuracy),
+     Tests (exact commands and real results), Limits (what the tests do not prove). -->
+
+- [ ] Entry added to `CHANGELOG.md` under `## [Unreleased]`
+
 ## Testing
 
 <!-- Describe how you tested this. Include test names or paste relevant output. -->

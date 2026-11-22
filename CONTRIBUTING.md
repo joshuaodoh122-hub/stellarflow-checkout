@@ -111,6 +111,10 @@ The memo-matching logic in `core/src/memo-matcher.ts` must maintain high test co
 - [ ] Security-sensitive changes are noted in the PR description
 - [ ] Non-custodial invariant is maintained
 - [ ] Testnet is still the default in all examples
+- [ ] A dated, reasoned entry has been added to `CHANGELOG.md` under `## [Unreleased]`
+      as `### YYYY-MM-DD — <branch name>` with: **Changes** (files and what),
+      **Why** (the concrete defect or inaccuracy being fixed), **Tests** (exact commands
+      and real results), **Limits** (what the tests do not prove)
 
 ## Code of Conduct
 
