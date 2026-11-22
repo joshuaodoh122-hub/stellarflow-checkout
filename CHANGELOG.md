@@ -12,6 +12,89 @@ checklist.
 
 ## [Unreleased]
 
+### 2026-11-22 — docs/honest-docs-and-claims-audit (Task 4: ignore generated files)
+
+**Changes:**
+- `contracts/escrow/.gitignore`: added `/test_snapshots/` so cargo-test snapshot
+  files produced by the escrow test suite are never accidentally tracked.
+- `.gitignore` (root): added `horizon-cursor.txt` (written by the demo server's
+  Horizon streaming cursor, `packages/demo/src/server.ts` line
+  `CURSOR_FILE = path.resolve(__dirname, '../../horizon-cursor.txt')`) and
+  `testnet-proof-output.txt` (suggested tee target in `docs/testnet-proof.md`
+  Step 4).
+
+**Why:** `contracts/escrow/test_snapshots/` was an untracked directory after
+running `cargo test`. The two root-level runtime files could appear after running
+the demo server or the testnet proof script and would otherwise need to be manually
+unstaged. No tracked file was removed (none were tracked to begin with).
+
+**Tests:**
+```
+npm run lint        ✅ exit 0 (run 2026-11-22)
+npm run typecheck   ✅ exit 0 (run 2026-11-22)
+npm test -- --forceExit   ✅ 364 passed, 15 suites (run 2026-11-22)
+( cd contracts/escrow && cargo fmt --check )   ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
+    cargo clippy --locked --target wasm32v1-none -- -D warnings )  ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && cargo test --locked )  ✅ 35 passed, 0 failed (run 2026-11-22)
+```
+
+**Limits:** `.gitignore` rules do not prevent a developer from force-adding
+ignored files; they only suppress the default tracking and status noise.
+
+---
+
+### 2026-11-22 — docs/honest-docs-and-claims-audit (Task 3: deployment and proof docs)
+
+**Changes:**
+- `contracts/escrow/DEPLOY.md`:
+  - Build command: `cargo build --target wasm32v1-none --release` →
+    `cargo build --locked --target wasm32v1-none --release` (consistent with CI).
+  - Section 6 mainnet checklist: replaced "17 Rust + 34 TS tests" with real
+    counts (35 Rust / 364 TS as of 2026-11-22) and the exact commands.
+  - Section 7: removed stale "17/17 Rust tests + 34/34 TypeScript tests"
+    language and false "in this PR" framing; replaced with accurate current
+    counts, commands, dates, and a pointer to `docs/testnet-proof.md`.
+  - `stellar-cli` install command: already a binary download (`curl -L …
+    v28.1.0 … tar.gz`), not `cargo install`. Left as-is; added `--locked` to
+    the `cargo build` only.
+- `docs/testnet-proof.md`:
+  - Step 1 build command: `cargo build --target wasm32v1-none --release` →
+    `export SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=true && cargo
+    build --locked --target wasm32v1-none --release` (env var is required when
+    calling cargo directly for soroban-sdk; `--locked` matches CI).
+  - `cargo install --locked stellar-cli` (Prerequisite 2) → binary download
+    matching the v28.1.0 release that `contracts.yml` installs.
+  - "NOT YET RUN" markers in the Results section are unchanged.
+- `scripts/escrow-testnet-demo.ts`: verified against current validations (amount
+  > 0: `DEPOSIT_AMOUNT = '10000000'` ✓; payer ≠ merchant: separate random
+  keypairs ✓; no `timeoutLedgers` field sent so the router passes 0 / contract
+  uses `DEFAULT_TIMEOUT_LEDGERS` ✓). No changes needed.
+
+**Why:** `docs/testnet-proof.md` instructed `cargo install --locked stellar-cli`
+(slow, unversioned build) rather than the same binary download that CI uses.
+Both `docs/testnet-proof.md` and `DEPLOY.md` were missing `--locked` and the
+required `SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2` env var on `cargo
+build`. `DEPLOY.md` Section 7 still cited the old test counts (17/34).
+
+**Tests:**
+```
+npm run lint        ✅ exit 0 (run 2026-11-22)
+npm run typecheck   ✅ exit 0 (run 2026-11-22)
+npm test -- --forceExit   ✅ 364 passed, 15 suites (run 2026-11-22)
+( cd contracts/escrow && cargo fmt --check )   ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
+    cargo clippy --locked --target wasm32v1-none -- -D warnings )  ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && cargo test --locked )  ✅ 35 passed, 0 failed (run 2026-11-22)
+```
+Script parameters verified by reading `scripts/escrow-testnet-demo.ts` (lines 70,
+197–218, 241–243): amount positive, distinct keypairs, no timeout override.
+
+**Limits:** The script has not been run against a live testnet — that remains NOT
+YET RUN. Changes are documentation-only; no contract logic was changed.
+
+---
+
 ### 2026-11-22 — docs/honest-docs-and-claims-audit (Task 2: security model and limitations)
 
 **Changes:**

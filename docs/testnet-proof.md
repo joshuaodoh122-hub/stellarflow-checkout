@@ -14,10 +14,14 @@ belongs here. No placeholder hashes, no invented contract IDs.
    rustup target add wasm32v1-none
    ```
 
-2. Stellar CLI:
+2. Stellar CLI v28.1.0 (the version CI uses):
    ```bash
-   # https://developers.stellar.org/docs/tools/stellar-cli
-   cargo install --locked stellar-cli
+   # Download the pre-built binary — same as contracts.yml uses
+   curl -L https://github.com/stellar/stellar-cli/releases/download/v28.1.0/stellar-cli-28.1.0-x86_64-unknown-linux-gnu.tar.gz \
+     -o stellar-cli.tar.gz
+   tar xzf stellar-cli.tar.gz
+   sudo mv stellar /usr/local/bin/stellar
+   stellar --version  # stellar 28.1.0
    ```
 
 3. Node.js ≥ 18 and this repo's dependencies installed:
@@ -33,7 +37,9 @@ belongs here. No placeholder hashes, no invented contract IDs.
 
 ```bash
 cd contracts/escrow
-cargo build --target wasm32v1-none --release
+# The env var is required when invoking cargo directly for soroban-sdk
+export SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=true
+cargo build --locked --target wasm32v1-none --release
 
 # Deploy to testnet (replace <FUNDED_ACCOUNT> with a funded testnet keypair secret)
 stellar contract deploy \
