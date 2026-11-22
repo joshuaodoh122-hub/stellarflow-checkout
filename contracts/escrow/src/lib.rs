@@ -39,6 +39,11 @@
 //!
 //! - Third-party arbitration / dispute resolution
 //! - Partial releases or partial refunds
+//!
+//! ## Input validation
+//!
+//! `deposit` rejects invalid inputs **before** any token transfer or storage
+//! write. See `EscrowError` variants 8–10 for the specific checks.
 
 #![no_std]
 
@@ -99,6 +104,12 @@ pub enum EscrowError {
     NotAuthorized = 6,
     /// Payer-initiated refund before timeout has elapsed.
     TimeoutNotElapsed = 7,
+    /// deposit() called with amount <= 0.
+    InvalidAmount = 8,
+    /// deposit() called with payer == merchant.
+    SameParty = 9,
+    /// deposit() called with timeout_ledgers above MAX_TIMEOUT_LEDGERS.
+    TimeoutTooLong = 10,
 }
 
 // ─── Storage keys ─────────────────────────────────────────────────────────────
@@ -118,6 +129,16 @@ pub enum DataKey {
 /// Callers may pass a custom value to `deposit()` if the use case requires
 /// a different window (e.g. 7-day digital downloads vs 60-day physical goods).
 pub const DEFAULT_TIMEOUT_LEDGERS: u32 = 518_400;
+
+/// Maximum allowed timeout: 1 year at ~5 s per ledger.
+///
+/// 365 days × 24 h × 3600 s / 5 s per ledger = 6_307_200 ledgers.
+///
+/// This cap prevents a depositor from locking funds indefinitely.
+/// The server MUST also validate this before constructing a deposit XDR.
+/// Pass 0 to `deposit()` to use `DEFAULT_TIMEOUT_LEDGERS`; any non-zero value
+/// above this constant is rejected with `EscrowError::TimeoutTooLong`.
+pub const MAX_TIMEOUT_LEDGERS: u32 = 6_307_200;
 
 // ─── Contract ─────────────────────────────────────────────────────────────────
 
@@ -143,7 +164,14 @@ impl EscrowContract {
     ///
     /// # Errors
     ///
-    /// * `EscrowError::AlreadyExists` if an escrow for `order_id` already exists.
+    /// * `EscrowError::InvalidAmount`   – `amount` is zero or negative (checked
+    ///                                    before any token transfer or storage write).
+    /// * `EscrowError::SameParty`       – `payer == merchant` (checked before any
+    ///                                    token transfer or storage write).
+    /// * `EscrowError::TimeoutTooLong`  – non-zero `timeout_ledgers` exceeds
+    ///                                    `MAX_TIMEOUT_LEDGERS` (checked before any
+    ///                                    token transfer or storage write).
+    /// * `EscrowError::AlreadyExists`   – an escrow for `order_id` already exists.
     pub fn deposit(
         env: Env,
         payer: Address,
@@ -153,6 +181,25 @@ impl EscrowContract {
         order_id: BytesN<32>,
         timeout_ledgers: u32,
     ) -> Result<(), EscrowError> {
+        // ── Input validation (before auth, storage reads, or token transfers) ──
+
+        // Reject zero or negative amounts
+        if amount <= 0 {
+            return Err(EscrowError::InvalidAmount);
+        }
+
+        // Reject same payer and merchant — a self-escrow is meaningless and likely
+        // a misconfiguration.
+        if payer == merchant {
+            return Err(EscrowError::SameParty);
+        }
+
+        // Reject non-zero timeouts that exceed the one-year cap.
+        // Zero means "use the default" and is always accepted.
+        if timeout_ledgers > 0 && timeout_ledgers > MAX_TIMEOUT_LEDGERS {
+            return Err(EscrowError::TimeoutTooLong);
+        }
+
         // Require payer authorisation (prevents front-running / griefing)
         payer.require_auth();
 
@@ -803,9 +850,10 @@ mod tests {
         let contract_id = env.register(EscrowContract, ());
         let client = EscrowContractClient::new(&env, &contract_id);
 
-        // Very long timeout so payer can never self-refund in this test
+        // Use DEFAULT_TIMEOUT_LEDGERS so payer cannot self-refund in this test.
+        // (u32::MAX was used previously but now exceeds MAX_TIMEOUT_LEDGERS.)
         let oid = order_id(&env, 14);
-        client.deposit(&payer, &merchant, &100, &token_addr, &oid, &u32::MAX);
+        client.deposit(&payer, &merchant, &100, &token_addr, &oid, &0);
 
         // Merchant refunds immediately at ledger 0 — must succeed
         client.refund(&oid, &merchant);
@@ -838,5 +886,158 @@ mod tests {
 
         let record = client.get_escrow(&oid);
         assert_eq!(record.deposited_at, 42);
+    }
+
+    // ─── Task 1: Input validation ─────────────────────────────────────────
+
+    /// deposit() with amount = 0 → InvalidAmount before any transfer or storage write
+    #[test]
+    fn test_deposit_zero_amount_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let payer = Address::generate(&env);
+        let merchant = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let token_addr = create_token(&env, &admin);
+        // Mint nothing — no funds should move
+        mint(&env, &token_addr, &admin, &payer, 1_000);
+
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let token_client = token::Client::new(&env, &token_addr);
+
+        let oid = order_id(&env, 20);
+        let err = client
+            .try_deposit(&payer, &merchant, &0, &token_addr, &oid, &0)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, EscrowError::InvalidAmount);
+
+        // No funds moved
+        assert_eq!(token_client.balance(&payer), 1_000);
+        assert_eq!(token_client.balance(&contract_id), 0);
+        // No record stored
+        let not_found = client.try_get_escrow(&oid).unwrap_err().unwrap();
+        assert_eq!(not_found, EscrowError::NotFound);
+    }
+
+    /// deposit() with negative amount → InvalidAmount before any transfer or storage write
+    #[test]
+    fn test_deposit_negative_amount_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let payer = Address::generate(&env);
+        let merchant = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let token_addr = create_token(&env, &admin);
+        mint(&env, &token_addr, &admin, &payer, 1_000);
+
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let token_client = token::Client::new(&env, &token_addr);
+
+        let oid = order_id(&env, 21);
+        let err = client
+            .try_deposit(&payer, &merchant, &-1, &token_addr, &oid, &0)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, EscrowError::InvalidAmount);
+
+        // No funds moved
+        assert_eq!(token_client.balance(&payer), 1_000);
+        assert_eq!(token_client.balance(&contract_id), 0);
+        // No record stored
+        let not_found = client.try_get_escrow(&oid).unwrap_err().unwrap();
+        assert_eq!(not_found, EscrowError::NotFound);
+    }
+
+    /// deposit() with payer == merchant → SameParty before any transfer or storage write
+    #[test]
+    fn test_deposit_same_payer_and_merchant_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let payer = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let token_addr = create_token(&env, &admin);
+        mint(&env, &token_addr, &admin, &payer, 1_000);
+
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let token_client = token::Client::new(&env, &token_addr);
+
+        let oid = order_id(&env, 22);
+        // payer and merchant are the same address
+        let err = client
+            .try_deposit(&payer, &payer, &100, &token_addr, &oid, &0)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, EscrowError::SameParty);
+
+        // No funds moved
+        assert_eq!(token_client.balance(&payer), 1_000);
+        assert_eq!(token_client.balance(&contract_id), 0);
+        // No record stored
+        let not_found = client.try_get_escrow(&oid).unwrap_err().unwrap();
+        assert_eq!(not_found, EscrowError::NotFound);
+    }
+
+    /// deposit() with timeout_ledgers > MAX_TIMEOUT_LEDGERS → TimeoutTooLong
+    /// before any transfer or storage write
+    #[test]
+    fn test_deposit_timeout_too_long_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let payer = Address::generate(&env);
+        let merchant = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let token_addr = create_token(&env, &admin);
+        mint(&env, &token_addr, &admin, &payer, 1_000);
+
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let token_client = token::Client::new(&env, &token_addr);
+
+        let oid = order_id(&env, 23);
+        let too_long = MAX_TIMEOUT_LEDGERS + 1;
+        let err = client
+            .try_deposit(&payer, &merchant, &100, &token_addr, &oid, &too_long)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, EscrowError::TimeoutTooLong);
+
+        // No funds moved
+        assert_eq!(token_client.balance(&payer), 1_000);
+        assert_eq!(token_client.balance(&contract_id), 0);
+        // No record stored
+        let not_found = client.try_get_escrow(&oid).unwrap_err().unwrap();
+        assert_eq!(not_found, EscrowError::NotFound);
+    }
+
+    /// deposit() with timeout_ledgers == MAX_TIMEOUT_LEDGERS → succeeds (boundary)
+    #[test]
+    fn test_deposit_timeout_at_max_accepted() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let payer = Address::generate(&env);
+        let merchant = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let token_addr = create_token(&env, &admin);
+        mint(&env, &token_addr, &admin, &payer, 1_000);
+
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let oid = order_id(&env, 24);
+        // Exactly at the cap should succeed
+        client
+            .deposit(&payer, &merchant, &100, &token_addr, &oid, &MAX_TIMEOUT_LEDGERS);
+
+        let record = client.get_escrow(&oid);
+        assert_eq!(record.timeout_ledgers, MAX_TIMEOUT_LEDGERS);
     }
 }

@@ -65,6 +65,51 @@ available to verify contract tests pass.
 
 ---
 
+### 2026-11-22 — fix/escrow-contract-hardening (Task 1: deposit input validation)
+
+**Changes:**
+- `contracts/escrow/src/lib.rs`:
+  - New `EscrowError::InvalidAmount = 8` — deposit with amount ≤ 0
+  - New `EscrowError::SameParty = 9` — deposit with payer == merchant
+  - New `EscrowError::TimeoutTooLong = 10` — deposit with non-zero timeout_ledgers above `MAX_TIMEOUT_LEDGERS`
+  - New constant `MAX_TIMEOUT_LEDGERS = 6_307_200` (1 year at ~5 s/ledger: 365 × 24 × 3600 / 5)
+  - `deposit()`: three new checks execute before `payer.require_auth()`, before the
+    duplicate-key storage read, and before the token transfer
+  - `deposit()` doc comment error list updated with the three new variants
+  - `test_merchant_refund_no_time_gate`: was using `u32::MAX` as timeout (now rejected
+    by `TimeoutTooLong`); changed to `0` (DEFAULT_TIMEOUT_LEDGERS) which is correct for
+    the test's intent
+  - 5 new tests: `test_deposit_zero_amount_rejected`, `test_deposit_negative_amount_rejected`,
+    `test_deposit_same_payer_and_merchant_rejected`, `test_deposit_timeout_too_long_rejected`,
+    `test_deposit_timeout_at_max_accepted`
+  - Each new test asserts the exact error variant AND that no funds moved AND no record
+    was stored
+
+**Why:** `deposit()` previously accepted zero/negative amounts, self-escrowing (payer ==
+merchant), and arbitrarily long timeouts. A zero-amount deposit would still transfer
+(the SAC contract would handle it, likely as a no-op) and store a record — a useless
+but persistent on-chain entry. Same payer/merchant means the merchant could release
+immediately and "pay themselves", which is likely a misconfiguration. Unbounded timeouts
+could lock funds for longer than a year, which is unreasonable for a commerce application.
+
+**Tests:**
+```
+cargo fmt --check    — not run (cargo not available in this environment)
+cargo clippy         — not run (cargo not available in this environment)
+cargo test           — not run (cargo not available in this environment)
+npm run lint         ✅ exit 0 (run 2026-11-22)
+npm run typecheck    ✅ exit 0 (run 2026-11-22)
+npm test             ✅ 356/356, 15 suites (run 2026-11-22)
+```
+
+**Limits:** Rust contract tests could not be run — no Cargo/Rust toolchain in this
+environment. TypeScript tests confirm no regressions in the TS layer. The validation
+logic is straightforward (three comparisons before any external call) and the new
+tests assert it in both the error case and the boundary case; a Rust toolchain would
+be needed to confirm the test suite compiles and passes.
+
+---
+
 ## Dated change history (2026-09-29 to 2026-10-03)
 
 ### 2026-10-03 — Review follow-ups (documentation, security, CI hygiene)
