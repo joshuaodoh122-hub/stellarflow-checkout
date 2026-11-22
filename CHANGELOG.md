@@ -12,6 +12,58 @@ checklist.
 
 ## [Unreleased]
 
+### 2026-11-22 — docs/honest-docs-and-claims-audit (Task 8: changelog hygiene)
+
+**Changes:**
+- `CHANGELOG.md`: added this entry (Task 8) only. No existing entries were
+  edited or removed.
+
+**Correction of the Part 1 investigation note (line ~1645):**
+The Part 1 Task 8 entry recorded that "`main`'s latest CI was failing" at the
+time it was written (referencing run `36728276089`, 2026-10-02 vintage). This
+was true when written: `gh run list --branch main` confirms `CI` runs
+`37064462525` through `37115611108` all ended `completed failure` between
+2026-10-02 and 2026-10-03. Those failures were the `@typescript-eslint/no-unused-vars`
+lint errors fixed by PR #27. As of 2026-11-22, the last four `CI` runs on `main`
+(from PRs #29, #30, #31 and their pushes) all ended `completed success` (run
+IDs 44988686052, 45007394490, 45007394580, 45013596067, 45013596109).
+`gh run list` was available and was used to confirm this.
+**Conclusion:** `main`'s CI was failing when that entry was written and is
+passing now. The old entry was accurate for its date; this new entry records
+the current state.
+
+**Prose wording audit (Task 8 requirement):**
+Every line of `CHANGELOG.md` was searched for phrases referring to an external
+evaluation ("rejection", "post-rejection", "resubmission", "review" as an
+external review). Results:
+
+| Line | Text | Action |
+|------|------|--------|
+| 697 | `to an external "review", "rejection", or "post-rejection", those phrases were replaced` | Left as-is — this sentence is itself describing the rewording already applied in a previous entry; not a new occurrence of the disallowed phrase |
+| 835 | `fix/group-b-post-rejection` | Left as-is — branch name; task instructions say to leave branch names exactly as they are |
+| 2147 | `XDR validation rejection paths` | Left as-is — "rejection" here means HTTP 400 response (request rejected by the server), a standard technical term, not an external evaluation |
+
+No prose (non-branch-name, non-technical) occurrences of the disallowed phrases
+remain after this check.
+
+**Tests:**
+```
+bash scripts/check_claims.sh   ✅ 80 rows checked, all OK (run 2026-11-22)
+npm run lint        ✅ exit 0 (run 2026-11-22)
+npm run typecheck   ✅ exit 0 (run 2026-11-22)
+npm test -- --forceExit   ✅ 365 passed, 16 suites (run 2026-11-22)
+( cd contracts/escrow && cargo fmt --check )   ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
+    cargo clippy --locked --target wasm32v1-none -- -D warnings )  ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && cargo test --locked )  ✅ 35 passed, 0 failed (run 2026-11-22)
+```
+
+**Limits:** This entry corrects the record by adding new information; it does
+not change the Part 1 entry. The PR that fixed the CI failure on `main` (#27)
+was already merged before Part 2 began; this entry documents that fact.
+
+---
+
 ### 2026-11-22 — docs/honest-docs-and-claims-audit (Task 7: CI and contributor docs)
 
 **Changes:**
