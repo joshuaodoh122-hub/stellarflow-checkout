@@ -12,6 +12,78 @@ checklist.
 
 ## [Unreleased]
 
+### 2026-11-22 — docs/honest-docs-and-claims-audit (Task 1: README accuracy)
+
+**Changes:**
+- `README.md`:
+  - Added a Contracts CI badge (`.github/workflows/contracts.yml`) next to the
+    existing JS/TS CI badge.
+  - "Soroban escrow — honest status" table: `Rust escrow contract` row 17 → 35
+    tests with the command `cargo test --locked`; removed stale per-component
+    counts (3/6/6/3) and "106 tests (2 suites)" in favour of "see CI badge".
+  - Replaced the false "The 17 Rust contract tests are written but not yet run
+    in CI — cargo is not available in the CI environment" with an accurate list
+    of what `contracts.yml` runs: `cargo fmt --check`,
+    `cargo clippy --locked --target wasm32v1-none -- -D warnings`,
+    `cargo test --locked`, and the
+    `cargo build --locked --target wasm32v1-none --release` WASM build (Rust
+    stable, `wasm32v1-none` target, stellar-cli v28.1.0).
+  - Added a "Contract behaviour (v0.2)" paragraph (links to
+    `contracts/escrow/README.md` instead of duplicating): deposit validation
+    errors 8 `InvalidAmount` / 9 `SameParty` / 10 `TimeoutTooLong` before any
+    transfer or storage write; `release`/`refund` write status before the token
+    transfer; `Deposited`/`Released`/`Refunded` events (refund carries
+    `caller`); TTL extension is not automatic and `extend_escrow_ttl` exists
+    for keepers.
+  - Added a "Timeout bounds" paragraph: the contract rejects `timeout_ledgers`
+    above `MAX_TIMEOUT_LEDGERS` (6,307,200 ≈ 1 year) with no minimum
+    (0 = use the `DEFAULT_TIMEOUT_LEDGERS` 518,400 ≈ 30 days); the HTTP router
+    additionally enforces a floor of `MIN_TIMEOUT_LEDGERS` (1) when
+    `timeoutLedgers` is supplied, and never sends 0 to the contract.
+  - Known-limitation #6: 106/2 suites → 138 escrow TS tests across 3 suites
+    with date and command; "17 Rust tests not yet run in CI" → 35 Rust tests
+    run in CI (`cargo test --locked`).
+  - Development section `npm test` count: 356 (2026-10-03) → 364 across 15
+    suites (2026-11-22).
+  - Testnet build command: `cargo build --target wasm32v1-none --release` →
+    `SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=true cargo build --locked
+    --target wasm32v1-none --release` (direct cargo builds of soroban-sdk need
+    the env var).
+  - Removed a duplicate `CHANGELOG.md` line in the project-structure tree.
+  - Kept "Not yet run on testnet" / "Not yet run" wording; added no claims of
+    audits, adoption, mainnet use or production readiness.
+
+**Why:** The README stated the Rust contract had 17 tests (it has 35), the TS
+suite had 356 tests (it has 364), that escrow tests were "106 in 2 suites", and
+— most misleadingly — that the Rust tests are "not yet run in CI" because
+"cargo is not available in the CI environment". `contracts.yml` does run
+fmt/clippy/test/WASM build, so those claims were false. Counts were hard-coded
+with a 2026-10-03 date, so they go stale.
+
+**Tests:**
+```
+npm run lint        ✅ exit 0 (run 2026-11-22)
+npm run typecheck   ✅ exit 0 (run 2026-11-22)
+npm test -- --forceExit   ✅ 364 passed, 15 suites (run 2026-11-22)
+( cd contracts/escrow && cargo fmt --check )   ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
+    cargo clippy --locked --target wasm32v1-none -- -D warnings )  ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && cargo test --locked )  ✅ 35 passed, 0 failed (run 2026-11-22)
+```
+The 35 Rust count and the contract/error/timeout facts were verified against
+`contracts/escrow/src/lib.rs` and `packages/server/src/escrow-router.ts`
+(`MAX_TIMEOUT_LEDGERS = 6_307_200`, `MIN_TIMEOUT_LEDGERS = 1`,
+`DEFAULT_TIMEOUT_LEDGERS = 518_400`). The escrow test count (138 across 3
+suites: `escrow-router.test.ts` 72, `escrow-session.test.ts` 39,
+`http-soroban-rpc-client.test.ts` 27) was read by running jest per file.
+
+**Limits:** The README is documentation; the test suites do not assert README
+text, so the numbers will go stale as tests are added — that is why the doc
+points to the CI badges and gives the commands to regenerate them. "Not yet
+run on testnet" reflects that no live testnet run has been recorded.
+
+---
+
 ### 2026-11-22 — fix/escrow-contract-hardening (Task 8: contract CI --locked)
 
 **Changes:**

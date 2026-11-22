@@ -4,6 +4,7 @@ Open-source, non-custodial payment widget for the [Stellar network](https://stel
 Lets merchants accept **USDC** and **XLM** with ~5 second settlement and near-zero fees — without the 2–3%+ taken by traditional processors.
  
 [![CI](https://github.com/joshuaodoh122-hub/stellarflow-checkout/actions/workflows/ci.yml/badge.svg)](https://github.com/joshuaodoh122-hub/stellarflow-checkout/actions/workflows/ci.yml)
+[![Contracts CI](https://github.com/joshuaodoh122-hub/stellarflow-checkout/actions/workflows/contracts.yml/badge.svg)](https://github.com/joshuaodoh122-hub/stellarflow-checkout/actions/workflows/contracts.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Stellar: Testnet](https://img.shields.io/badge/Stellar-Testnet-blue)](https://developers.stellar.org/docs/fundamentals-and-concepts/testnet-and-pubnet)
  
@@ -30,21 +31,40 @@ StellarFlow supports two independent checkout modes. They can run on the same se
 
 | Component | Status | Evidence |
 |-----------|--------|----------|
-| Rust escrow contract (`contracts/escrow`) | ✅ 17 unit tests written | `contracts/escrow/src/lib.rs` |
-| `HttpSorobanRpcClient` (real SDK integration) | ✅ Implemented | `packages/server/src/escrow-session.ts` |
-| `simulateContract` (read path) | ✅ 3 tests | `http-soroban-rpc-client.test.ts` |
-| `buildUnsignedContractTx` (non-custodial write) | ✅ 6 tests | `http-soroban-rpc-client.test.ts` |
-| `submitSignedTx` (poll-until-confirmed) | ✅ 6 tests | `http-soroban-rpc-client.test.ts` |
-| `invokeContract` (scripts/tests signer) | ✅ 3 tests | `http-soroban-rpc-client.test.ts` |
-| `POST /api/escrow` + 6 other endpoints | ✅ real-XDR supertest tests | `escrow-router.test.ts` |
+| Rust escrow contract (`contracts/escrow`) | ✅ 35 unit tests (run `cargo test --locked`; see the Contracts CI badge) | `contracts/escrow/src/lib.rs`, [`contracts/escrow/README.md`](contracts/escrow/README.md) |
+| `HttpSorobanRpcClient` (real SDK integration) | ✅ implemented and unit-tested (see CI badge for current totals) | `packages/server/src/escrow-session.ts` |
+| `POST /api/escrow` + release/refund submit endpoints | ✅ real-XDR supertest tests (see CI badge) | `packages/server/src/__tests__/escrow-router.test.ts` |
 | Deposit XDR: full 6-arg validation (payer/merchant/amount/token/order_id/timeout) | ✅ one test per arg | `escrow-router.test.ts` |
 | Post-confirmation on-chain record verification | ✅ mismatch test | `escrow-router.test.ts` |
-| `POST /api/escrow/:id/release/submit` | ✅ 6 tests including wrong-contract/order_id/source | `escrow-router.test.ts` |
-| `POST /api/escrow/:id/refund/submit` | ✅ 6 tests including wrong-contract/order_id/third-party | `escrow-router.test.ts` |
-| Testnet proof script | ✅ Written, uses server endpoints, typechecks | `scripts/escrow-testnet-demo.ts` |
-| Live testnet run | ⏳ **Not yet run** — requires deployed contract + funded accounts | See below |
+| Testnet proof script | ✅ written, typechecks | `scripts/escrow-testnet-demo.ts` |
+| Live testnet run | ⏳ **Not yet run** — requires a deployed contract + funded accounts | See below |
 
-**What "not yet run" means:** The TypeScript implementation is complete and all 106 escrow unit/integration tests pass (2 suites — see CI badge for current totals). The escrow contract itself is not yet deployed to testnet by this author. The testnet proof script (`scripts/escrow-testnet-demo.ts`) is ready to execute once a contract is deployed.
+Counts are not hard-coded per component to avoid staleness. As of 2026-11-22 the
+suite was **35 Rust contract tests** (`cargo test --locked` in `contracts/escrow`)
+and **364 TypeScript tests across 15 suites** (`npm test`). For the current
+numbers see the CI badges at the top of this file, or regenerate them:
+
+```bash
+( cd contracts/escrow && cargo test --locked )   # Rust contract tests
+npm test                                        # TypeScript tests
+```
+
+The escrow contract **is** run in CI. `.github/workflows/contracts.yml` runs, on
+every push/PR touching `contracts/**`:
+
+- `cargo fmt --check`
+- `cargo clippy --locked --target wasm32v1-none -- -D warnings`
+- `cargo test --locked`
+- `cargo build --locked --target wasm32v1-none --release` (WASM build, artifact uploaded)
+
+using Rust stable with the `wasm32v1-none` target and stellar-cli v28.1.0.
+
+**What "not yet run" means:** The TypeScript integration is complete and the
+contract compiles and passes its unit tests in CI. Neither has been run against
+a live testnet yet — that requires a deployed contract and funded accounts. The
+testnet proof script (`scripts/escrow-testnet-demo.ts`) is ready to run once a
+contract is deployed; its results are not yet recorded (see
+[`docs/testnet-proof.md`](docs/testnet-proof.md)).
 
 ---
 
@@ -78,12 +98,16 @@ After the deposit transaction confirms on-chain, `getEscrow()` is called and the
 
 **All-or-nothing:** Release transfers the full deposited amount to the merchant. Refund returns the full amount to the payer. Partial amounts are not supported in v0.2.
 
+**Contract behaviour (v0.2):** The on-chain contract defines its own behaviour independently of the server; the full function/auth/error/event table is in [`contracts/escrow/README.md`](contracts/escrow/README.md). In short: `deposit` rejects `amount <= 0` (`InvalidAmount`, code 8), `payer == merchant` (`SameParty`, code 9), and `timeout_ledgers` above `MAX_TIMEOUT_LEDGERS` (`TimeoutTooLong`, code 10) — all before any token transfer or storage write. `release`/`refund` write the new status (`Released`/`Refunded`) to storage **before** the token transfer (checks-effects-interactions). Each state change emits an event (`Deposited`, `Released`, `Refunded`; the refund event records `caller`). Persistent storage entries have a TTL: `deposit`/`release`/`refund` extend it on each call, but extension is **not automatic** — for a held escrow that sits idle, a payer or keeper bot must call `extend_escrow_ttl(order_id)` before the entry is archived.
+
+**Timeout bounds:** The contract rejects `timeout_ledgers` above `MAX_TIMEOUT_LEDGERS` (6,307,200 ≈ 1 year at ~5 s/ledger) and has **no minimum** — passing `0` means "use the default" (`DEFAULT_TIMEOUT_LEDGERS`, 518,400 ≈ 30 days). A caller invoking the contract directly can therefore pass `0` for the default, or any value from 1 to 6,307,200. The HTTP router (`escrow-router.ts`) additionally enforces a floor of `MIN_TIMEOUT_LEDGERS` (1) when `timeoutLedgers` is supplied: omit it to use the default, or supply an integer in `[1, 6307200]`. The router never sends `0` to the contract.
+
 **Remaining limitations (v0.2):**
 - No partial refunds — refund always returns the full deposited amount
 - No third-party arbitration — if merchant claims fulfilment and payer disagrees, payer must wait for timeout
 - Single token per order — one SAC token contract per escrow
 - Session store is in-memory — server restart loses escrow session state (same limitation as classic checkout)
-- The 17 Rust contract tests are written but not yet run in CI — `cargo` is not available in the CI environment; they require a Rust toolchain with the `wasm32v1-none` target
+- The contract is exercised in CI (fmt, clippy, tests, WASM build — see the Contracts CI badge above); it is not yet deployed to testnet
 
 **Soroban SDK note:** This integration uses `stellar-sdk@12.3.0` (already in the repo) which ships full Soroban support (`SorobanRpc.Server`, `Contract`, `nativeToScVal`, `scValToNative`, `assembleTransaction`). A separate `@stellar/stellar-sdk` package is not needed and was not added.
 
@@ -97,7 +121,9 @@ After the deposit transaction confirms on-chain, `getEscrow()` is called and the
 
 # 2. Deploy the escrow contract to testnet
 cd contracts/escrow
-cargo build --target wasm32v1-none --release
+# Direct `cargo build` of soroban-sdk needs this env var (or use `stellar contract build`):
+SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=true \
+  cargo build --locked --target wasm32v1-none --release
 stellar contract deploy \
   --wasm target/wasm32v1-none/release/stellarflow_escrow.wasm \
   --network testnet \
@@ -385,7 +411,7 @@ npm install        # install all workspace dependencies
 npm run build      # compile all TypeScript packages
 npm run typecheck  # type-check without emitting
 npm run lint       # ESLint
-npm test           # run all tests (356 as of 2026-10-03 — see CI badge for current count)
+npm test           # run all tests (see CI badge; 364 across 15 suites as of 2026-11-22)
 npm run test:coverage  # with coverage report
 ```
 
@@ -428,10 +454,11 @@ cd packages/server && npm test
    stretch goal.
 
 6. **Soroban escrow: tested against a mocked network only.** The server validates every
-   XDR argument, verifies the on-chain record after confirmation (against a mock), and
-   all 106 escrow unit/integration tests pass (2 suites, verified 2026-10-03). The contract has 17 Rust unit tests written (not yet run in CI — requires Rust toolchain).
-   Neither has been run against a live testnet — that requires a deployed contract and
-   funded accounts. See the [Soroban escrow — honest status](#soroban-escrow--honest-status-v02)
+   XDR argument and verifies the on-chain record after confirmation (against a mock). As
+   of 2026-11-22 there were 138 escrow TypeScript tests across 3 suites (`npm test`; see
+   the CI badge for current totals) and 35 Rust contract tests run in CI
+   (`cargo test --locked`). Neither has been run against a live testnet — that requires
+   a deployed contract and funded accounts. See the [Soroban escrow — honest status](#soroban-escrow--honest-status-v02)
    section above.
 
 ---
@@ -464,7 +491,6 @@ stellarflow-checkout/
 ├── ARCHITECTURE.md
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
-├── CHANGELOG.md
 ├── SECURITY.md
 └── LICENSE          # MIT
 ```
