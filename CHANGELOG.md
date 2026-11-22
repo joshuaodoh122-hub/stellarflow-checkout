@@ -12,6 +12,51 @@ checklist.
 
 ## [Unreleased]
 
+### 2026-11-22 — fix/escrow-contract-hardening (Task 5: auth tests without blanket mocks)
+
+**Changes:**
+- `contracts/escrow/src/lib.rs`: 5 new auth-proving tests in the `#[cfg(test)]` module:
+  - `test_deposit_without_payer_auth_fails` — calls `deposit` with `env.mock_auths(&[])` (no
+    auth granted); asserts the call returns an error.
+  - `test_release_by_wrong_address_fails` — deposits with `mock_all_auths`, then authorizes only
+    an impostor address via `env.mock_auths(&[MockAuth { address: &impostor, ... }])`; asserts
+    `try_release` fails.
+  - `test_refund_caller_payer_but_authorized_by_other_fails` — deposits, advances past timeout,
+    authorizes an impostor (not payer), passes `caller = payer`; asserts `try_refund` fails.
+  - `test_payer_refund_one_ledger_before_timeout_fails_at_timeout_succeeds` — with
+    `mock_all_auths`: at `unlock_at - 1` fails with `TimeoutNotElapsed`; at exactly
+    `deposited_at + timeout_ledgers` a fresh identical escrow succeeds.
+  - `test_third_party_cannot_refund_after_timeout` — with `mock_all_auths`: a third party
+    address is rejected with `NotAuthorized` even after the timeout.
+
+**Why:** The existing tests all use `mock_all_auths()`, which makes the test host approve
+every auth check regardless of which address is authorized. This cannot prove that the
+contract would actually reject a call from an unauthorized address on a live network.
+The new tests use `mock_auths(&[])` or `mock_auths(&[MockAuth { address: &impostor, ... }])`
+to prove specific auth boundaries.
+
+**What these tests can and cannot prove:**
+- They can prove the contract calls `require_auth()` for the right address (payer in deposit,
+  merchant in release, caller in refund), because the host's testutils layer enforces auth
+  for the specified mock entries only.
+- They cannot prove the network's actual auth enforcement (the testutils host is a simplified
+  emulation). Real network enforcement requires a live Soroban node.
+- The boundary test proves `deposited_at + timeout_ledgers` is the exact unlock ledger; it
+  cannot prove clock or ledger sequence correctness on mainnet.
+
+**Tests:**
+```
+cargo fmt --check        ✅ exit 0 (run 2026-11-22)
+SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1
+cargo clippy --target wasm32v1-none -- -D warnings
+                         ✅ exit 0 (run 2026-11-22)
+cargo test               ✅ 35 passed, 0 failed (run 2026-11-22)
+```
+
+**Limits:** See "What these tests can and cannot prove" above.
+
+---
+
 ### 2026-11-22 — fix/escrow-contract-hardening (Task 4: events)
 
 **Changes:**

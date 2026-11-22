@@ -554,8 +554,10 @@ impl EscrowContract {
 mod tests {
     use super::*;
     use soroban_sdk::{
-        testutils::{storage::Persistent as _, Address as _, Events as _, Ledger},
-        Address, Env, Event,
+        testutils::{
+            storage::Persistent as _, Address as _, Events as _, Ledger, MockAuth, MockAuthInvoke,
+        },
+        Address, Env, Event, IntoVal,
     };
 
     // ─── Test helpers ─────────────────────────────────────────────────────
@@ -1495,6 +1497,210 @@ mod tests {
             our_events,
             [expected.to_xdr(&env, &contract_id)],
             "payer refund() event caller must be the payer"
+        );
+    }
+
+    // ─── Task 5: Auth tests WITHOUT blanket mocks ─────────────────────────
+
+    /// deposit() without payer's auth must fail.
+    ///
+    /// What this proves: the contract calls `payer.require_auth()` before
+    /// transferring funds. Without any auth mock, the host enforces the check.
+    ///
+    /// What this cannot prove: the host's auth enforcement on a live network
+    /// (the test host is a simplified emulation).
+    #[test]
+    fn test_deposit_without_payer_auth_fails() {
+        let env = Env::default();
+        // No mock_all_auths — no auth granted
+
+        let payer = Address::generate(&env);
+        let merchant = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let token_addr = create_token(&env, &admin);
+        // We still need to mint; SAC admin ops require auth, so mock only the mint.
+        env.mock_all_auths();
+        mint(&env, &token_addr, &admin, &payer, 1_000);
+        // Clear the blanket mock before the deposit
+        env.mock_auths(&[]);
+
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let oid = order_id(&env, 60);
+        // try_deposit must fail — no payer auth present
+        let result = client.try_deposit(&payer, &merchant, &100, &token_addr, &oid, &0);
+        assert!(
+            result.is_err(),
+            "deposit() without payer auth must return an error"
+        );
+    }
+
+    /// release() authorized by someone other than the recorded merchant must fail.
+    ///
+    /// What this proves: `record.merchant.require_auth()` uses the stored address,
+    /// not the transaction signer. Authorizing a different address is insufficient.
+    #[test]
+    fn test_release_by_wrong_address_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let payer = Address::generate(&env);
+        let merchant = Address::generate(&env);
+        let impostor = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let token_addr = create_token(&env, &admin);
+        mint(&env, &token_addr, &admin, &payer, 1_000);
+
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let oid = order_id(&env, 61);
+        client.deposit(&payer, &merchant, &100, &token_addr, &oid, &0);
+
+        // Authorize only the impostor (not the recorded merchant)
+        env.mock_auths(&[MockAuth {
+            address: &impostor,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "release",
+                args: (oid.clone(),).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+
+        let result = client.try_release(&oid);
+        assert!(
+            result.is_err(),
+            "release() authorized by impostor must fail"
+        );
+    }
+
+    /// refund() with caller=payer but authorized by someone else must fail.
+    ///
+    /// What this proves: `caller.require_auth()` checks the caller address,
+    /// not the transaction signer. Signing for a different address is rejected.
+    #[test]
+    fn test_refund_caller_payer_but_authorized_by_other_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let payer = Address::generate(&env);
+        let merchant = Address::generate(&env);
+        let impostor = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let token_addr = create_token(&env, &admin);
+        mint(&env, &token_addr, &admin, &payer, 1_000);
+
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let oid = order_id(&env, 62);
+        let deposit_ledger = env.ledger().sequence();
+        client.deposit(&payer, &merchant, &100, &token_addr, &oid, &100);
+
+        // Advance past timeout so the payer-initiated refund is allowed by the
+        // time-gate check — the auth check must still reject it.
+        env.ledger().set_sequence_number(deposit_ledger + 101);
+
+        // Authorize only the impostor, but pass caller=payer
+        env.mock_auths(&[MockAuth {
+            address: &impostor,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "refund",
+                args: (oid.clone(), payer.clone()).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+
+        let result = client.try_refund(&oid, &payer);
+        assert!(
+            result.is_err(),
+            "refund() with payer caller but impostor auth must fail"
+        );
+    }
+
+    /// Payer refund one ledger before timeout must fail; at exactly timeout succeeds.
+    ///
+    /// What this proves: the `current_ledger < unlock_at` guard is tight;
+    /// `deposited_at + timeout_ledgers` is the exact unlock ledger.
+    #[test]
+    fn test_payer_refund_one_ledger_before_timeout_fails_at_timeout_succeeds() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let payer = Address::generate(&env);
+        let merchant = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let token_addr = create_token(&env, &admin);
+        mint(&env, &token_addr, &admin, &payer, 1_000);
+
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let timeout = 50_u32;
+        let oid_before = order_id(&env, 63);
+        let deposit_ledger = env.ledger().sequence();
+        client.deposit(&payer, &merchant, &100, &token_addr, &oid_before, &timeout);
+
+        // One ledger before unlock: must fail with TimeoutNotElapsed
+        let unlock_at = deposit_ledger + timeout;
+        env.ledger().set_sequence_number(unlock_at - 1);
+        let err = client.try_refund(&oid_before, &payer).unwrap_err().unwrap();
+        assert_eq!(
+            err,
+            EscrowError::TimeoutNotElapsed,
+            "refund one ledger before unlock must fail with TimeoutNotElapsed"
+        );
+
+        // At exactly the unlock ledger: must succeed
+        // Deposit fresh escrow for this check (previous one now stuck in TimeoutNotElapsed state)
+        let oid_at = order_id(&env, 64);
+        env.ledger().set_sequence_number(deposit_ledger); // reset ledger
+        mint(&env, &token_addr, &admin, &payer, 1_000);
+        client.deposit(&payer, &merchant, &100, &token_addr, &oid_at, &timeout);
+        env.ledger().set_sequence_number(deposit_ledger + timeout);
+        // Should succeed without error
+        client.refund(&oid_at, &payer);
+        let record = client.get_escrow(&oid_at);
+        assert_eq!(record.status, EscrowStatus::Refunded);
+    }
+
+    /// A third party cannot refund even after the timeout has elapsed.
+    ///
+    /// What this proves: the `!is_merchant && !is_payer` guard rejects arbitrary
+    /// addresses regardless of timing.
+    #[test]
+    fn test_third_party_cannot_refund_after_timeout() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let payer = Address::generate(&env);
+        let merchant = Address::generate(&env);
+        let third_party = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let token_addr = create_token(&env, &admin);
+        mint(&env, &token_addr, &admin, &payer, 1_000);
+
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let timeout = 10_u32;
+        let oid = order_id(&env, 65);
+        let deposit_ledger = env.ledger().sequence();
+        client.deposit(&payer, &merchant, &100, &token_addr, &oid, &timeout);
+
+        // Advance well past the timeout
+        env.ledger()
+            .set_sequence_number(deposit_ledger + timeout + 100);
+
+        // Third party refund — must fail even after timeout
+        let err = client.try_refund(&oid, &third_party).unwrap_err().unwrap();
+        assert_eq!(
+            err,
+            EscrowError::NotAuthorized,
+            "third party refund must fail with NotAuthorized even after timeout"
         );
     }
 }
