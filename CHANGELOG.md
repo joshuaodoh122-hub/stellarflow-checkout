@@ -12,6 +12,48 @@ checklist.
 
 ## [Unreleased]
 
+### 2026-11-22 — fix/escrow-contract-hardening (Task 4: events)
+
+**Changes:**
+- `contracts/escrow/src/lib.rs`:
+  - New event types using `#[contractevent]` macro (the non-deprecated API in SDK 28):
+    - `Deposited { order_id, payer, merchant, token, amount }` — topics: `("escrow", "deposited", order_id)`
+    - `Released  { order_id, payer, merchant, token, amount }` — topics: `("escrow", "released", order_id)`
+    - `Refunded  { order_id, payer, merchant, token, amount, caller }` — topics: `("escrow", "refunded", order_id)`
+  - `deposit()`: emits `Deposited` after the storage write.
+  - `release()`: emits `Released` after the token transfer.
+  - `refund()`: emits `Refunded` after the token transfer; `caller` field records whether the payer or merchant triggered the refund.
+  - 4 new tests: `test_deposit_emits_deposited_event`, `test_release_emits_released_event`,
+    `test_refund_merchant_emits_refunded_event`, `test_refund_payer_emits_refunded_event_with_caller_payer`.
+    Each test uses `env.events().all().filter_by_contract(&contract_id)` and compares with
+    `expected.to_xdr(&env, &contract_id)` per the SDK v28 guidance.
+
+**Why:** Without events, off-chain systems (block explorers, the server's status poller,
+keeper bots) cannot observe state changes without polling `get_escrow`. Events make each
+state transition indexable by `order_id` topic. The `caller` field on `Refunded` lets
+off-chain code distinguish merchant-voluntary refunds from payer-timeout refunds.
+
+**Note on `env.events().all()` semantics:** In soroban-sdk 28 testutils,
+`env.events().all()` returns events from the most recent contract invocation only, not
+from all invocations since the test started. Tests therefore call the function under test
+last and filter to our contract's events using `filter_by_contract`.
+
+**Tests:**
+```
+cargo fmt --check        ✅ exit 0 (run 2026-11-22)
+SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1
+cargo clippy --target wasm32v1-none -- -D warnings
+                         ✅ exit 0 (run 2026-11-22)
+cargo test               ✅ 30 passed, 0 failed (run 2026-11-22)
+```
+
+**Limits:** Tests confirm event structure matches the `#[contractevent]`-derived XDR for
+the happy paths. They do not test that failed transactions emit no events (Soroban
+handles that at the host level). The `to_xdr` comparison is a structural check; it does
+not verify that a real Stellar indexer would decode the event correctly.
+
+---
+
 ### 2026-11-22 — fix/escrow-contract-hardening (Task 3: storage TTL)
 
 **Changes:**

@@ -48,8 +48,72 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env,
+    contract, contracterror, contractevent, contractimpl, contracttype, token, Address, BytesN, Env,
 };
+
+// ─── Events ───────────────────────────────────────────────────────────────────
+
+/// Emitted by `deposit()` when funds are placed into escrow.
+///
+/// Topics: `("escrow", "deposited", order_id)`
+/// Data:   `{ payer, merchant, token, amount }`
+#[contractevent(topics = ["escrow", "deposited"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Deposited {
+    /// 32-byte order identifier (also a topic for indexing).
+    #[topic]
+    pub order_id: BytesN<32>,
+    /// Address that deposited funds.
+    pub payer: Address,
+    /// Address that will receive funds on release.
+    pub merchant: Address,
+    /// SAC token contract address.
+    pub token: Address,
+    /// Amount in token's smallest unit.
+    pub amount: i128,
+}
+
+/// Emitted by `release()` when funds are transferred to the merchant.
+///
+/// Topics: `("escrow", "released", order_id)`
+/// Data:   `{ payer, merchant, token, amount }`
+#[contractevent(topics = ["escrow", "released"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Released {
+    /// 32-byte order identifier (also a topic for indexing).
+    #[topic]
+    pub order_id: BytesN<32>,
+    /// Original payer address.
+    pub payer: Address,
+    /// Merchant address receiving the funds.
+    pub merchant: Address,
+    /// SAC token contract address.
+    pub token: Address,
+    /// Amount in token's smallest unit.
+    pub amount: i128,
+}
+
+/// Emitted by `refund()` when funds are returned to the payer.
+///
+/// Topics: `("escrow", "refunded", order_id)`
+/// Data:   `{ payer, merchant, token, amount, caller }`
+#[contractevent(topics = ["escrow", "refunded"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Refunded {
+    /// 32-byte order identifier (also a topic for indexing).
+    #[topic]
+    pub order_id: BytesN<32>,
+    /// Original payer address (receives the refunded funds).
+    pub payer: Address,
+    /// Merchant address.
+    pub merchant: Address,
+    /// SAC token contract address.
+    pub token: Address,
+    /// Amount in token's smallest unit.
+    pub amount: i128,
+    /// The address that invoked `refund()` (payer or merchant).
+    pub caller: Address,
+}
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -270,6 +334,16 @@ impl EscrowContract {
         env.storage().persistent().set(&key, &record);
         Self::bump_ttl(&env, &key);
 
+        // Emit deposited event
+        Deposited {
+            order_id,
+            payer: record.payer,
+            merchant: record.merchant,
+            token: record.token,
+            amount: record.amount,
+        }
+        .publish(&env);
+
         Ok(())
     }
 
@@ -318,6 +392,16 @@ impl EscrowContract {
             &record.merchant,
             &record.amount,
         );
+
+        // Emit released event
+        Released {
+            order_id,
+            payer: record.payer,
+            merchant: record.merchant,
+            token: record.token,
+            amount: record.amount,
+        }
+        .publish(&env);
 
         // Update status (moved above the transfer — see checks-effects-interactions)
 
@@ -400,6 +484,17 @@ impl EscrowContract {
             &record.amount,
         );
 
+        // Emit refunded event
+        Refunded {
+            order_id,
+            payer: record.payer,
+            merchant: record.merchant,
+            token: record.token,
+            amount: record.amount,
+            caller,
+        }
+        .publish(&env);
+
         // Update status (moved above the transfer — see checks-effects-interactions)
 
         Ok(())
@@ -459,8 +554,8 @@ impl EscrowContract {
 mod tests {
     use super::*;
     use soroban_sdk::{
-        testutils::{storage::Persistent as _, Address as _, Ledger},
-        Address, Env,
+        testutils::{storage::Persistent as _, Address as _, Events as _, Ledger},
+        Address, Env, Event,
     };
 
     // ─── Test helpers ─────────────────────────────────────────────────────
@@ -1251,5 +1346,155 @@ mod tests {
         let oid = order_id(&env, 42);
         let err = client.try_extend_escrow_ttl(&oid).unwrap_err().unwrap();
         assert_eq!(err, EscrowError::NotFound);
+    }
+
+    // ─── Task 4: Events ───────────────────────────────────────────────────
+
+    /// deposit() emits a Deposited event with the correct order_id topic, payer,
+    /// merchant, token and amount in the data.
+    #[test]
+    fn test_deposit_emits_deposited_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let payer = Address::generate(&env);
+        let merchant = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let token_addr = create_token(&env, &admin);
+        mint(&env, &token_addr, &admin, &payer, 1_000);
+
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let oid = order_id(&env, 50);
+        client.deposit(&payer, &merchant, &400, &token_addr, &oid, &0);
+
+        // env.events().all() returns events from the last contract invocation.
+        // The SAC token contract also emits a transfer event. Filter to ours.
+        let our_events = env.events().all().filter_by_contract(&contract_id);
+        let expected = Deposited {
+            order_id: oid.clone(),
+            payer: payer.clone(),
+            merchant: merchant.clone(),
+            token: token_addr.clone(),
+            amount: 400,
+        };
+        assert_eq!(
+            our_events,
+            [expected.to_xdr(&env, &contract_id)],
+            "deposit() must emit exactly one Deposited event from our contract"
+        );
+    }
+
+    /// release() emits a Released event with order_id, payer, merchant, token, amount.
+    #[test]
+    fn test_release_emits_released_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let payer = Address::generate(&env);
+        let merchant = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let token_addr = create_token(&env, &admin);
+        mint(&env, &token_addr, &admin, &payer, 1_000);
+
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let oid = order_id(&env, 51);
+        client.deposit(&payer, &merchant, &300, &token_addr, &oid, &0);
+
+        // env.events().all() shows the last invocation's events only.
+        // After release(), the last invocation is release, so we see the Released event.
+        client.release(&oid);
+
+        let our_events = env.events().all().filter_by_contract(&contract_id);
+        let expected = Released {
+            order_id: oid.clone(),
+            payer: payer.clone(),
+            merchant: merchant.clone(),
+            token: token_addr.clone(),
+            amount: 300,
+        };
+        assert_eq!(
+            our_events,
+            [expected.to_xdr(&env, &contract_id)],
+            "release() must emit exactly one Released event from our contract"
+        );
+    }
+
+    /// refund() emits a Refunded event with order_id, payer, merchant, token,
+    /// amount and caller (here: the merchant doing a voluntary refund).
+    #[test]
+    fn test_refund_merchant_emits_refunded_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let payer = Address::generate(&env);
+        let merchant = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let token_addr = create_token(&env, &admin);
+        mint(&env, &token_addr, &admin, &payer, 1_000);
+
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let oid = order_id(&env, 52);
+        client.deposit(&payer, &merchant, &250, &token_addr, &oid, &0);
+        client.refund(&oid, &merchant);
+
+        let our_events = env.events().all().filter_by_contract(&contract_id);
+        let expected = Refunded {
+            order_id: oid.clone(),
+            payer: payer.clone(),
+            merchant: merchant.clone(),
+            token: token_addr.clone(),
+            amount: 250,
+            caller: merchant.clone(),
+        };
+        assert_eq!(
+            our_events,
+            [expected.to_xdr(&env, &contract_id)],
+            "refund() must emit exactly one Refunded event from our contract (merchant caller)"
+        );
+    }
+
+    /// refund() by payer (after timeout) emits a Refunded event with caller = payer.
+    #[test]
+    fn test_refund_payer_emits_refunded_event_with_caller_payer() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let payer = Address::generate(&env);
+        let merchant = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let token_addr = create_token(&env, &admin);
+        mint(&env, &token_addr, &admin, &payer, 1_000);
+
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        let oid = order_id(&env, 53);
+        let deposit_ledger = env.ledger().sequence();
+        client.deposit(&payer, &merchant, &150, &token_addr, &oid, &100);
+
+        // Advance past timeout
+        env.ledger().set_sequence_number(deposit_ledger + 101);
+        client.refund(&oid, &payer);
+
+        let our_events = env.events().all().filter_by_contract(&contract_id);
+        let expected = Refunded {
+            order_id: oid.clone(),
+            payer: payer.clone(),
+            merchant: merchant.clone(),
+            token: token_addr.clone(),
+            amount: 150,
+            caller: payer.clone(),
+        };
+        assert_eq!(
+            our_events,
+            [expected.to_xdr(&env, &contract_id)],
+            "payer refund() event caller must be the payer"
+        );
     }
 }
