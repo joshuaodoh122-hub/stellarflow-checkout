@@ -12,6 +12,48 @@ checklist.
 
 ## [Unreleased]
 
+### 2026-11-22 — docs/honest-docs-and-claims-audit (Task 5: timeout constant drift guard)
+
+**Changes:**
+- `packages/server/src/__tests__/timeout-constant-drift.test.ts` (new):
+  reads `contracts/escrow/src/lib.rs`, extracts `pub const MAX_TIMEOUT_LEDGERS:
+  u32 = <value>;` with a strict regex, strips Rust numeric underscores, and
+  asserts the integer equals the TypeScript copy (`6_307_200` in
+  `escrow-router.ts` line 136). Fails with an explicit message if the pattern
+  is not found (rename or deletion), so a drift is never silently ignored.
+
+**Why:** `MAX_TIMEOUT_LEDGERS` appears in both `contracts/escrow/src/lib.rs`
+(Rust, enforced at contract level) and `packages/server/src/escrow-router.ts`
+(TypeScript, enforced at HTTP layer). Without a test, the two can drift silently
+when one is updated. This test proves the two numeric literals are identical; it
+does not prove the contract enforces the limit correctly (that is the Rust unit
+tests' job).
+
+**Tests:**
+```
+npm test -- --testPathPattern=timeout-constant-drift --forceExit
+  ✅ 1 passed (run 2026-11-22)
+
+npm test -- --forceExit
+  ✅ 365 passed, 15 suites (run 2026-11-22)
+
+npm run lint        ✅ exit 0 (run 2026-11-22)
+npm run typecheck   ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && cargo fmt --check )   ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
+    cargo clippy --locked --target wasm32v1-none -- -D warnings )  ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && cargo test --locked )  ✅ 35 passed, 0 failed (run 2026-11-22)
+```
+
+**Limits:** This test proves the two literals are equal; it does not prove the
+server or contract rejects values above the limit at runtime (covered by
+`escrow-router.test.ts` and the Rust `test_timeout_too_long` test). It also
+does not check `MIN_TIMEOUT_LEDGERS` or `DEFAULT_TIMEOUT_LEDGERS` because those
+constants do not appear in the Rust contract source (the router enforces the
+floor independently).
+
+---
+
 ### 2026-11-22 — docs/honest-docs-and-claims-audit (Task 4: ignore generated files)
 
 **Changes:**
