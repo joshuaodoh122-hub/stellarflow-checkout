@@ -12,6 +12,176 @@ checklist.
 
 ## [Unreleased]
 
+### 2026-11-22 — fix/escrow-contract-hardening (Task 6: escrow README)
+
+**Changes:**
+- `contracts/escrow/README.md`: new file. Covers:
+  - No token whitelist (and what actually provides the protection: server-side token pinning).
+  - Timeout chosen by depositor; server must validate.
+  - No arbitration or partial refund.
+  - TTL not automatic; callers or keeper bots must call `extend_escrow_ttl`.
+  - Unaudited status.
+  - Function table with auth requirements, errors and events.
+  - Error code table (codes 1–10).
+  - Events table (topics and data fields).
+  - Constants table.
+  - State machine diagram.
+  - Build instructions including the `SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1`
+    env var required for direct `cargo` invocations.
+  - Comparison with classic Horizon checkout.
+
+**Why:** Without a README, the contract's security assumptions and operational requirements
+(especially the token whitelist caveat and the TTL keeper requirement) are only in source
+comments and would not be visible to a developer deploying or integrating the contract.
+
+**Tests:**
+```
+No code changed — no Rust tests to run.
+```
+
+**Limits:** The README describes design intent and known limitations. It cannot be
+automatically verified as accurate if the contract code changes without updating it.
+
+---
+
+### 2026-11-22 — fix/escrow-contract-hardening (Task 5: auth tests without blanket mocks)
+
+**Changes:**
+- `contracts/escrow/src/lib.rs`: 5 new auth-proving tests in the `#[cfg(test)]` module:
+  - `test_deposit_without_payer_auth_fails` — calls `deposit` with `env.mock_auths(&[])` (no
+    auth granted); asserts the call returns an error.
+  - `test_release_by_wrong_address_fails` — deposits with `mock_all_auths`, then authorizes only
+    an impostor address via `env.mock_auths(&[MockAuth { address: &impostor, ... }])`; asserts
+    `try_release` fails.
+  - `test_refund_caller_payer_but_authorized_by_other_fails` — deposits, advances past timeout,
+    authorizes an impostor (not payer), passes `caller = payer`; asserts `try_refund` fails.
+  - `test_payer_refund_one_ledger_before_timeout_fails_at_timeout_succeeds` — with
+    `mock_all_auths`: at `unlock_at - 1` fails with `TimeoutNotElapsed`; at exactly
+    `deposited_at + timeout_ledgers` a fresh identical escrow succeeds.
+  - `test_third_party_cannot_refund_after_timeout` — with `mock_all_auths`: a third party
+    address is rejected with `NotAuthorized` even after the timeout.
+
+**Why:** The existing tests all use `mock_all_auths()`, which makes the test host approve
+every auth check regardless of which address is authorized. This cannot prove that the
+contract would actually reject a call from an unauthorized address on a live network.
+The new tests use `mock_auths(&[])` or `mock_auths(&[MockAuth { address: &impostor, ... }])`
+to prove specific auth boundaries.
+
+**What these tests can and cannot prove:**
+- They can prove the contract calls `require_auth()` for the right address (payer in deposit,
+  merchant in release, caller in refund), because the host's testutils layer enforces auth
+  for the specified mock entries only.
+- They cannot prove the network's actual auth enforcement (the testutils host is a simplified
+  emulation). Real network enforcement requires a live Soroban node.
+- The boundary test proves `deposited_at + timeout_ledgers` is the exact unlock ledger; it
+  cannot prove clock or ledger sequence correctness on mainnet.
+
+**Tests:**
+```
+cargo fmt --check        ✅ exit 0 (run 2026-11-22)
+SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1
+cargo clippy --target wasm32v1-none -- -D warnings
+                         ✅ exit 0 (run 2026-11-22)
+cargo test               ✅ 35 passed, 0 failed (run 2026-11-22)
+```
+
+**Limits:** See "What these tests can and cannot prove" above.
+
+---
+
+### 2026-11-22 — fix/escrow-contract-hardening (Task 4: events)
+
+**Changes:**
+- `contracts/escrow/src/lib.rs`:
+  - New event types using `#[contractevent]` macro (the non-deprecated API in SDK 28):
+    - `Deposited { order_id, payer, merchant, token, amount }` — topics: `("escrow", "deposited", order_id)`
+    - `Released  { order_id, payer, merchant, token, amount }` — topics: `("escrow", "released", order_id)`
+    - `Refunded  { order_id, payer, merchant, token, amount, caller }` — topics: `("escrow", "refunded", order_id)`
+  - `deposit()`: emits `Deposited` after the storage write.
+  - `release()`: emits `Released` after the token transfer.
+  - `refund()`: emits `Refunded` after the token transfer; `caller` field records whether the payer or merchant triggered the refund.
+  - 4 new tests: `test_deposit_emits_deposited_event`, `test_release_emits_released_event`,
+    `test_refund_merchant_emits_refunded_event`, `test_refund_payer_emits_refunded_event_with_caller_payer`.
+    Each test uses `env.events().all().filter_by_contract(&contract_id)` and compares with
+    `expected.to_xdr(&env, &contract_id)` per the SDK v28 guidance.
+
+**Why:** Without events, off-chain systems (block explorers, the server's status poller,
+keeper bots) cannot observe state changes without polling `get_escrow`. Events make each
+state transition indexable by `order_id` topic. The `caller` field on `Refunded` lets
+off-chain code distinguish merchant-voluntary refunds from payer-timeout refunds.
+
+**Note on `env.events().all()` semantics:** In soroban-sdk 28 testutils,
+`env.events().all()` returns events from the most recent contract invocation only, not
+from all invocations since the test started. Tests therefore call the function under test
+last and filter to our contract's events using `filter_by_contract`.
+
+**Tests:**
+```
+cargo fmt --check        ✅ exit 0 (run 2026-11-22)
+SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1
+cargo clippy --target wasm32v1-none -- -D warnings
+                         ✅ exit 0 (run 2026-11-22)
+cargo test               ✅ 30 passed, 0 failed (run 2026-11-22)
+```
+
+**Limits:** Tests confirm event structure matches the `#[contractevent]`-derived XDR for
+the happy paths. They do not test that failed transactions emit no events (Soroban
+handles that at the host level). The `to_xdr` comparison is a structural check; it does
+not verify that a real Stellar indexer would decode the event correctly.
+
+---
+
+### 2026-11-22 — fix/escrow-contract-hardening (Task 3: storage TTL)
+
+**Changes:**
+- `contracts/escrow/src/lib.rs`:
+  - New constants `TTL_THRESHOLD = 3_153_600` (MAX_TIMEOUT_LEDGERS / 2) and
+    `TTL_EXTEND_TO = 12_614_400` (2 × MAX_TIMEOUT_LEDGERS, ≈ 2 years at 5 s/ledger).
+  - New private helper `bump_ttl(env, key)` that extends the persistent entry TTL
+    to `min(TTL_EXTEND_TO, env.storage().max_ttl())` when the remaining TTL is below
+    `min(TTL_THRESHOLD, extend_to)`.
+  - `deposit()`, `release()`, `refund()`: each calls `bump_ttl` after writing state.
+  - New public function `extend_escrow_ttl(env, order_id) -> Result<(), EscrowError>`:
+    callable by anyone (no auth), returns `NotFound` if no entry exists, extends TTL
+    otherwise. Documented as not automatic — callers or keeper bots must invoke it.
+  - `contracts/escrow/src/lib.rs`: also fixed trailing whitespace on line 1 (fmt) and
+    simplified redundant `timeout_ledgers > 0 &&` guard to `timeout_ledgers > MAX_TIMEOUT_LEDGERS`
+    (the `> 0` check was redundant since `MAX_TIMEOUT_LEDGERS > 0`; clippy caught this).
+  - Three new tests: `test_deposit_sets_ttl`, `test_extend_escrow_ttl_increases_ttl`,
+    `test_extend_escrow_ttl_not_found`. TTL is read using `soroban_sdk::testutils::storage::Persistent`
+    trait (must be in scope via `use soroban_sdk::testutils::storage::Persistent as _`).
+
+**Why:** Persistent storage entries on Stellar/Soroban expire if their TTL is not
+extended. Without TTL management, a held escrow's on-chain record could be archived
+by the network before the payer's refund window elapses, locking funds until the
+entry is manually restored. The TTL_EXTEND_TO constant (≈ 2 years) ensures a held
+escrow at maximum timeout has adequate TTL headroom. `extend_escrow_ttl` lets payers
+or keeper bots extend TTL without changing state.
+
+**Tests:**
+```
+cargo fmt --check        ✅ exit 0 (run 2026-11-22)
+SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1
+cargo clippy --target wasm32v1-none -- -D warnings
+                         ✅ exit 0 (run 2026-11-22)
+cargo test               ✅ 26 passed, 0 failed (run 2026-11-22)
+npm run lint             — not re-run; no TS files changed
+npm run typecheck        — not re-run; no TS files changed
+npm test                 — not re-run; no TS files changed
+```
+
+Note: `cargo clippy --target wasm32v1-none` requires the env var
+`SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1` because soroban-sdk 28.0.0's
+build script checks for stellar-cli v25.2.0+; the env var satisfies that check.
+
+**Limits:** TTL tests use the testutils `get_ttl` helper, which returns the TTL set
+by the last `extend_ttl` call in the test environment (not a real ledger countdown).
+The tests confirm the TTL is at least `TTL_THRESHOLD` after operations and does not
+decrease after `extend_escrow_ttl`. They cannot prove the network will honour the TTL
+or that the keeper-bot use case works end-to-end.
+
+---
+
 ### 2026-11-22 — fix/escrow-contract-hardening
 
 **Changes:**
@@ -62,6 +232,88 @@ cargo              not available in this environment — Rust checks not run
 **Limits:** Tests confirm no TypeScript regressions. The JOSHLOG verification table
 was confirmed with `grep` against the new CHANGELOG.md. No live Rust toolchain
 available to verify contract tests pass.
+
+---
+
+### 2026-11-22 — fix/escrow-contract-hardening (Task 2: checks-effects-interactions)
+
+**Changes:**
+- `contracts/escrow/src/lib.rs`:
+  - `release()`: moved `record.status = EscrowStatus::Released` and the storage
+    `set()` call to BEFORE the `token::Client::transfer()` call
+  - `refund()`: moved `record.status = EscrowStatus::Refunded` and the storage
+    `set()` call to BEFORE the `token::Client::transfer()` call
+  - New test `test_release_status_written_before_transfer`: after `release()`,
+    asserts stored status is `Released` and contract token balance is zero
+
+**Why:** In the original code, the token transfer came before the status write in
+both `release` and `refund`. If the token contract's `transfer` call somehow re-entered
+the escrow contract (via a malicious SAC or a future SDK change), the escrow record
+would still show `Held` during the external call, allowing a second `release` or
+`refund` to pass the status guard. Writing state first (checks-effects-interactions
+pattern) ensures the record is always up to date during the external call. Behaviour
+for callers is identical.
+
+**Tests:**
+```
+cargo fmt --check    — not run (cargo not available)
+cargo clippy         — not run (cargo not available)
+cargo test           — not run (cargo not available)
+npm run lint         ✅ exit 0 (run 2026-11-22)
+npm run typecheck    ✅ exit 0 (run 2026-11-22)
+npm test             ✅ 356/356, 15 suites (run 2026-11-22)
+```
+
+**Limits:** Rust contract tests not run. The existing `test_deposit_release_happy_path`
+and other happy-path tests already verified the balance/status outcome; the new test
+makes this explicit for the checks-effects ordering. The test environment uses a mock
+token contract — it cannot prove re-entrancy is blocked, only that the status is
+correct after a normal call.
+
+---
+
+### 2026-11-22 — fix/escrow-contract-hardening (Task 1: deposit input validation)
+
+**Changes:**
+- `contracts/escrow/src/lib.rs`:
+  - New `EscrowError::InvalidAmount = 8` — deposit with amount ≤ 0
+  - New `EscrowError::SameParty = 9` — deposit with payer == merchant
+  - New `EscrowError::TimeoutTooLong = 10` — deposit with non-zero timeout_ledgers above `MAX_TIMEOUT_LEDGERS`
+  - New constant `MAX_TIMEOUT_LEDGERS = 6_307_200` (1 year at ~5 s/ledger: 365 × 24 × 3600 / 5)
+  - `deposit()`: three new checks execute before `payer.require_auth()`, before the
+    duplicate-key storage read, and before the token transfer
+  - `deposit()` doc comment error list updated with the three new variants
+  - `test_merchant_refund_no_time_gate`: was using `u32::MAX` as timeout (now rejected
+    by `TimeoutTooLong`); changed to `0` (DEFAULT_TIMEOUT_LEDGERS) which is correct for
+    the test's intent
+  - 5 new tests: `test_deposit_zero_amount_rejected`, `test_deposit_negative_amount_rejected`,
+    `test_deposit_same_payer_and_merchant_rejected`, `test_deposit_timeout_too_long_rejected`,
+    `test_deposit_timeout_at_max_accepted`
+  - Each new test asserts the exact error variant AND that no funds moved AND no record
+    was stored
+
+**Why:** `deposit()` previously accepted zero/negative amounts, self-escrowing (payer ==
+merchant), and arbitrarily long timeouts. A zero-amount deposit would still transfer
+(the SAC contract would handle it, likely as a no-op) and store a record — a useless
+but persistent on-chain entry. Same payer/merchant means the merchant could release
+immediately and "pay themselves", which is likely a misconfiguration. Unbounded timeouts
+could lock funds for longer than a year, which is unreasonable for a commerce application.
+
+**Tests:**
+```
+cargo fmt --check    — not run (cargo not available in this environment)
+cargo clippy         — not run (cargo not available in this environment)
+cargo test           — not run (cargo not available in this environment)
+npm run lint         ✅ exit 0 (run 2026-11-22)
+npm run typecheck    ✅ exit 0 (run 2026-11-22)
+npm test             ✅ 356/356, 15 suites (run 2026-11-22)
+```
+
+**Limits:** Rust contract tests could not be run — no Cargo/Rust toolchain in this
+environment. TypeScript tests confirm no regressions in the TS layer. The validation
+logic is straightforward (three comparisons before any external call) and the new
+tests assert it in both the error case and the boundary case; a Rust toolchain would
+be needed to confirm the test suite compiles and passes.
 
 ---
 
