@@ -65,6 +65,43 @@ available to verify contract tests pass.
 
 ---
 
+### 2026-11-22 — fix/escrow-contract-hardening (Task 2: checks-effects-interactions)
+
+**Changes:**
+- `contracts/escrow/src/lib.rs`:
+  - `release()`: moved `record.status = EscrowStatus::Released` and the storage
+    `set()` call to BEFORE the `token::Client::transfer()` call
+  - `refund()`: moved `record.status = EscrowStatus::Refunded` and the storage
+    `set()` call to BEFORE the `token::Client::transfer()` call
+  - New test `test_release_status_written_before_transfer`: after `release()`,
+    asserts stored status is `Released` and contract token balance is zero
+
+**Why:** In the original code, the token transfer came before the status write in
+both `release` and `refund`. If the token contract's `transfer` call somehow re-entered
+the escrow contract (via a malicious SAC or a future SDK change), the escrow record
+would still show `Held` during the external call, allowing a second `release` or
+`refund` to pass the status guard. Writing state first (checks-effects-interactions
+pattern) ensures the record is always up to date during the external call. Behaviour
+for callers is identical.
+
+**Tests:**
+```
+cargo fmt --check    — not run (cargo not available)
+cargo clippy         — not run (cargo not available)
+cargo test           — not run (cargo not available)
+npm run lint         ✅ exit 0 (run 2026-11-22)
+npm run typecheck    ✅ exit 0 (run 2026-11-22)
+npm test             ✅ 356/356, 15 suites (run 2026-11-22)
+```
+
+**Limits:** Rust contract tests not run. The existing `test_deposit_release_happy_path`
+and other happy-path tests already verified the balance/status outcome; the new test
+makes this explicit for the checks-effects ordering. The test environment uses a mock
+token contract — it cannot prove re-entrancy is blocked, only that the status is
+correct after a normal call.
+
+---
+
 ### 2026-11-22 — fix/escrow-contract-hardening (Task 1: deposit input validation)
 
 **Changes:**

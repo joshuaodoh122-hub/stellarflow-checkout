@@ -266,6 +266,12 @@ impl EscrowContract {
         // address stored in the escrow record, not the invoker directly.
         record.merchant.require_auth();
 
+        // ── Checks-effects-interactions: write state BEFORE external call ──
+        // Update status and persist BEFORE the token transfer so the escrow
+        // record is never stale during the external call.
+        record.status = EscrowStatus::Released;
+        env.storage().persistent().set(&key, &record);
+
         // Transfer funds from this contract to the merchant
         let client = token::Client::new(&env, &record.token);
         client.transfer(
@@ -274,9 +280,7 @@ impl EscrowContract {
             &record.amount,
         );
 
-        // Update status
-        record.status = EscrowStatus::Released;
-        env.storage().persistent().set(&key, &record);
+        // Update status (moved above the transfer — see checks-effects-interactions)
 
         Ok(())
     }
@@ -342,6 +346,12 @@ impl EscrowContract {
         }
         // Merchant-initiated refund has no time gate — falls through immediately
 
+        // ── Checks-effects-interactions: write state BEFORE external call ──
+        // Update status and persist BEFORE the token transfer so the escrow
+        // record is never stale during the external call.
+        record.status = EscrowStatus::Refunded;
+        env.storage().persistent().set(&key, &record);
+
         // Transfer funds back to the payer
         let client = token::Client::new(&env, &record.token);
         client.transfer(
@@ -350,9 +360,7 @@ impl EscrowContract {
             &record.amount,
         );
 
-        // Update status
-        record.status = EscrowStatus::Refunded;
-        env.storage().persistent().set(&key, &record);
+        // Update status (moved above the transfer — see checks-effects-interactions)
 
         Ok(())
     }
@@ -886,6 +894,41 @@ mod tests {
 
         let record = client.get_escrow(&oid);
         assert_eq!(record.deposited_at, 42);
+    }
+
+    // ─── Task 2: Checks-effects-interactions ─────────────────────────────
+
+    /// After release(), the stored status is Released and the contract balance is zero.
+    /// This test verifies the state written by the checks-effects-interactions reorder
+    /// (status written before the token transfer) is correct on the happy path.
+    #[test]
+    fn test_release_status_written_before_transfer() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let payer = Address::generate(&env);
+        let merchant = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let token_addr = create_token(&env, &admin);
+        mint(&env, &token_addr, &admin, &payer, 500);
+
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let token_client = token::Client::new(&env, &token_addr);
+
+        let oid = order_id(&env, 30);
+        client.deposit(&payer, &merchant, &500, &token_addr, &oid, &0);
+
+        client.release(&oid);
+
+        // Stored status is Released
+        let record = client.get_escrow(&oid);
+        assert_eq!(record.status, EscrowStatus::Released);
+
+        // Contract holds no tokens
+        assert_eq!(token_client.balance(&contract_id), 0);
+        // Merchant received funds
+        assert_eq!(token_client.balance(&merchant), 500);
     }
 
     // ─── Task 1: Input validation ─────────────────────────────────────────
