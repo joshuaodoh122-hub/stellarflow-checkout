@@ -97,7 +97,15 @@ Run the Rust/Soroban contract unit tests (requires Rust toolchain with `wasm32v1
 
 ```bash
 npm run test:contracts
-# equivalent to: cargo test --manifest-path contracts/escrow/Cargo.toml
+# equivalent to: cargo test --manifest-path contracts/escrow/Cargo.toml --locked
+```
+
+Run the claims audit checker:
+
+```bash
+bash scripts/check_claims.sh
+# Verifies every VERIFIED row in docs/claims-audit.md has a named test that
+# exists in the test files. Exits 1 if any named test cannot be found.
 ```
 
 The memo-matching logic in `core/src/memo-matcher.ts` must maintain high test coverage. Do not reduce coverage below what is currently passing CI.
@@ -115,6 +123,8 @@ The memo-matching logic in `core/src/memo-matcher.ts` must maintain high test co
       as `### YYYY-MM-DD — <branch name>` with: **Changes** (files and what),
       **Why** (the concrete defect or inaccuracy being fixed), **Tests** (exact commands
       and real results), **Limits** (what the tests do not prove)
+- [ ] `bash scripts/check_claims.sh` passes (or new claims in `docs/claims-audit.md` have
+      been added for any new behavioural claim introduced by this PR)
 
 ## Code of Conduct
 

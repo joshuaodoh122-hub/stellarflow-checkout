@@ -38,7 +38,7 @@ cd contracts/escrow
 # Required by soroban-sdk's build script when invoking cargo directly
 export SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=true
 
-cargo build --target wasm32v1-none --release
+cargo build --locked --target wasm32v1-none --release
 
 # Artifact is at:
 # target/wasm32v1-none/release/stellarflow_escrow.wasm
@@ -118,7 +118,7 @@ const client = new EscrowClient({
 
 Before deploying to mainnet:
 
-- [ ] Full testnet regression pass (all 17 Rust tests + 34 TS tests green)
+- [ ] Full testnet regression pass (run `cargo test --locked` in `contracts/escrow` and `npm test -- --forceExit` from the repo root; counts as of 2026-11-22: 35 Rust + 364 TS)
 - [ ] Audit the contract for reentrancy, integer overflow, and storage exhaustion
 - [ ] Document the deployed contract ID in a project-controlled registry
 - [ ] Verify the WASM hash matches the source using:
@@ -140,13 +140,14 @@ stellar contract deploy \
 
 ---
 
-## 7. No live testnet deployment in this PR
+## 7. No live testnet deployment yet
 
-**This PR does not include a live testnet contract deployment.** The contract has
-been built, tested locally (17/17 Rust tests + 34/34 TypeScript tests), and the CI
-workflow is configured to build and test it on every push. A live testnet deployment
-should be done as part of the v0.2 release process, after the PR is reviewed and
-merged to a release branch.
+**No live testnet contract deployment has been performed.** The contract has been
+built and tested locally (35 Rust tests, `cargo test --locked`, 2026-11-22; 364 TS
+tests, `npm test -- --forceExit`, 2026-11-22), and the CI workflow is configured to
+build and test it on every push. A live testnet deployment should be done as part of
+the v0.2 release process, following the steps in this document and recording the
+real output in `docs/testnet-proof.md`.
 
-This is consistent with the CONTRIBUTING.md practice of not fabricating contract IDs
-or claiming a live deployment that has not actually been verified.
+Do not fabricate contract IDs or claim a live deployment that has not actually been
+verified — see `docs/testnet-proof.md` which is currently marked NOT YET RUN.

@@ -12,6 +12,410 @@ checklist.
 
 ## [Unreleased]
 
+### 2026-11-22 — docs/honest-docs-and-claims-audit (Task 8: changelog hygiene)
+
+**Changes:**
+- `CHANGELOG.md`: added this entry (Task 8) only. No existing entries were
+  edited or removed.
+
+**Correction of the Part 1 investigation note (line ~1645):**
+The Part 1 Task 8 entry recorded that "`main`'s latest CI was failing" at the
+time it was written (referencing run `36728276089`, 2026-10-02 vintage). This
+was true when written: `gh run list --branch main` confirms `CI` runs
+`37064462525` through `37115611108` all ended `completed failure` between
+2026-10-02 and 2026-10-03. Those failures were the `@typescript-eslint/no-unused-vars`
+lint errors fixed by PR #27. As of 2026-11-22, the last four `CI` runs on `main`
+(from PRs #29, #30, #31 and their pushes) all ended `completed success` (run
+IDs 44988686052, 45007394490, 45007394580, 45013596067, 45013596109).
+`gh run list` was available and was used to confirm this.
+**Conclusion:** `main`'s CI was failing when that entry was written and is
+passing now. The old entry was accurate for its date; this new entry records
+the current state.
+
+**Prose wording audit (Task 8 requirement):**
+Every line of `CHANGELOG.md` was searched for phrases referring to an external
+evaluation ("rejection", "post-rejection", "resubmission", "review" as an
+external review). Results:
+
+| Line | Text | Action |
+|------|------|--------|
+| 697 | `to an external "review", "rejection", or "post-rejection", those phrases were replaced` | Left as-is — this sentence is itself describing the rewording already applied in a previous entry; not a new occurrence of the disallowed phrase |
+| 835 | `fix/group-b-post-rejection` | Left as-is — branch name; task instructions say to leave branch names exactly as they are |
+| 2147 | `XDR validation rejection paths` | Left as-is — "rejection" here means HTTP 400 response (request rejected by the server), a standard technical term, not an external evaluation |
+
+No prose (non-branch-name, non-technical) occurrences of the disallowed phrases
+remain after this check.
+
+**Tests:**
+```
+bash scripts/check_claims.sh   ✅ 80 rows checked, all OK (run 2026-11-22)
+npm run lint        ✅ exit 0 (run 2026-11-22)
+npm run typecheck   ✅ exit 0 (run 2026-11-22)
+npm test -- --forceExit   ✅ 365 passed, 16 suites (run 2026-11-22)
+( cd contracts/escrow && cargo fmt --check )   ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
+    cargo clippy --locked --target wasm32v1-none -- -D warnings )  ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && cargo test --locked )  ✅ 35 passed, 0 failed (run 2026-11-22)
+```
+
+**Limits:** This entry corrects the record by adding new information; it does
+not change the Part 1 entry. The PR that fixed the CI failure on `main` (#27)
+was already merged before Part 2 began; this entry documents that fact.
+
+---
+
+### 2026-11-22 — docs/honest-docs-and-claims-audit (Task 7: CI and contributor docs)
+
+**Changes:**
+- `.github/workflows/ci.yml`: added a "Claims audit check" step (`bash
+  scripts/check_claims.sh`) after the Test step. Runs on both Node 18 and 20
+  matrix legs. No action versions changed — `actions/checkout@v4`,
+  `actions/setup-node@v4`, `actions/upload-artifact@v4` were already current
+  (verified by reading `ci.yml`). `npm ci` was already the install command.
+- `CONTRIBUTING.md`:
+  - Rust test command updated: `cargo test --manifest-path
+    contracts/escrow/Cargo.toml` → `cargo test --manifest-path
+    contracts/escrow/Cargo.toml --locked` (matches `ci.yml`).
+  - Added a "Run the claims audit checker" subsection (`bash
+    scripts/check_claims.sh`) with a one-line explanation of what it checks.
+  - Pull request checklist: added `bash scripts/check_claims.sh` passes (or
+    new rows added to `docs/claims-audit.md` for new behavioural claims).
+- `.github/PULL_REQUEST_TEMPLATE.md`: added a second Changelog checklist line
+  for `bash scripts/check_claims.sh` passing.
+- `contracts/escrow/rust-toolchain.toml`: **NOT added.** Fmt, clippy, tests
+  and the WASM build were run with `rustup stable` in this session but the
+  exact semver was not captured. Adding a `rust-toolchain.toml` with a pinned
+  version I cannot verify would be a false claim. The toolchain is pinned in
+  CI via `dtolnay/rust-toolchain@stable` in `contracts.yml`.
+
+**Why:** The CI `ci.yml` had no claims-check step, so a broken audit table
+would not be caught in PRs. `CONTRIBUTING.md` was missing the `--locked` flag
+on the Rust command, lacked instructions for the claims checker, and did not
+mention the claims-audit requirement in the PR checklist. The PR template had
+no checklist item for the claims audit.
+
+**Tests:**
+```
+bash scripts/check_claims.sh
+  ✅ 80 rows checked, all OK (run 2026-11-22)
+
+npm run lint        ✅ exit 0 (run 2026-11-22)
+npm run typecheck   ✅ exit 0 (run 2026-11-22)
+npm test -- --forceExit   ✅ 365 passed, 16 suites (run 2026-11-22)
+( cd contracts/escrow && cargo fmt --check )   ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
+    cargo clippy --locked --target wasm32v1-none -- -D warnings )  ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && cargo test --locked )  ✅ 35 passed, 0 failed (run 2026-11-22)
+```
+
+**Limits:** The claims-check CI step proves `check_claims.sh` exits 0 on the
+branch; it does not run the named tests themselves. `rust-toolchain.toml` was
+not added; the Rust version in CI is determined by `dtolnay/rust-toolchain@stable`
+at the time the workflow runs.
+
+---
+
+### 2026-11-22 — docs/honest-docs-and-claims-audit (Task 6: claims audit)
+
+**Changes:**
+- `docs/claims-audit.md` (new): 80-row table auditing behavioural claims from
+  README.md, ARCHITECTURE.md (escrow and checkout sections), SECURITY.md,
+  `contracts/escrow/README.md`, CONTRIBUTING.md, and `docs/good-first-issues.md`.
+  Columns: claim, source file and section, implementing function/file, test name
+  (backtick-quoted for automatic verification), status (VERIFIED / REWORDED /
+  REMOVED). Every VERIFIED row has a backtick-quoted test name that
+  `check_claims.sh` confirms exists.  Rows that cannot be backed by an automated
+  test are marked REWORDED (rate limiting, CORS, CI workflow checks, CI
+  instructions, audit status).
+- `scripts/check_claims.sh` (new): bash script that reads `docs/claims-audit.md`,
+  validates all status values, extracts backtick-quoted test names from VERIFIED
+  rows, and checks each one exists as either a Rust `fn <name>(` or a Jest
+  `it('<name>'...)` title string.  Exits 1 if any check fails.
+  Broken-copy proof: injecting a row with `\`this_test_does_not_exist\`` (VERIFIED)
+  and a row with status `INVALID_STATUS` produced:
+  ```
+  FAIL: Row 1: VERIFIED test not found: 'this_test_does_not_exist'
+  FAIL: Row 2: status 'INVALID_STATUS' is not VERIFIED, REWORDED, or REMOVED
+  check_claims.sh: 2 error(s) found in docs/claims-audit.md
+  ```
+
+**Why:** No single document listed the behavioural claims across all docs with
+their backing tests. Without this, a claim can drift from the code silently.
+The checker proves a named test exists; it does not prove the test covers the
+claim — that is documented in every row's explanatory text.
+
+**Tests:**
+```
+bash scripts/check_claims.sh
+  ✅ 80 rows checked, all OK (run 2026-11-22)
+
+npm run lint        ✅ exit 0 (run 2026-11-22)
+npm run typecheck   ✅ exit 0 (run 2026-11-22)
+npm test -- --forceExit   ✅ 365 passed, 16 suites (run 2026-11-22)
+( cd contracts/escrow && cargo fmt --check )   ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
+    cargo clippy --locked --target wasm32v1-none -- -D warnings )  ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && cargo test --locked )  ✅ 35 passed, 0 failed (run 2026-11-22)
+```
+
+**Limits:** `check_claims.sh` proves a test with the given name exists; it does
+not run the test or prove the test asserts the claim. Rows marked REWORDED have
+no automated check — they are verified by code reading only.
+
+---
+
+### 2026-11-22 — docs/honest-docs-and-claims-audit (Task 5: timeout constant drift guard)
+
+**Changes:**
+- `packages/server/src/__tests__/timeout-constant-drift.test.ts` (new):
+  reads `contracts/escrow/src/lib.rs`, extracts `pub const MAX_TIMEOUT_LEDGERS:
+  u32 = <value>;` with a strict regex, strips Rust numeric underscores, and
+  asserts the integer equals the TypeScript copy (`6_307_200` in
+  `escrow-router.ts` line 136). Fails with an explicit message if the pattern
+  is not found (rename or deletion), so a drift is never silently ignored.
+
+**Why:** `MAX_TIMEOUT_LEDGERS` appears in both `contracts/escrow/src/lib.rs`
+(Rust, enforced at contract level) and `packages/server/src/escrow-router.ts`
+(TypeScript, enforced at HTTP layer). Without a test, the two can drift silently
+when one is updated. This test proves the two numeric literals are identical; it
+does not prove the contract enforces the limit correctly (that is the Rust unit
+tests' job).
+
+**Tests:**
+```
+npm test -- --testPathPattern=timeout-constant-drift --forceExit
+  ✅ 1 passed (run 2026-11-22)
+
+npm test -- --forceExit
+  ✅ 365 passed, 15 suites (run 2026-11-22)
+
+npm run lint        ✅ exit 0 (run 2026-11-22)
+npm run typecheck   ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && cargo fmt --check )   ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
+    cargo clippy --locked --target wasm32v1-none -- -D warnings )  ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && cargo test --locked )  ✅ 35 passed, 0 failed (run 2026-11-22)
+```
+
+**Limits:** This test proves the two literals are equal; it does not prove the
+server or contract rejects values above the limit at runtime (covered by
+`escrow-router.test.ts` and the Rust `test_timeout_too_long` test). It also
+does not check `MIN_TIMEOUT_LEDGERS` or `DEFAULT_TIMEOUT_LEDGERS` because those
+constants do not appear in the Rust contract source (the router enforces the
+floor independently).
+
+---
+
+### 2026-11-22 — docs/honest-docs-and-claims-audit (Task 4: ignore generated files)
+
+**Changes:**
+- `contracts/escrow/.gitignore`: added `/test_snapshots/` so cargo-test snapshot
+  files produced by the escrow test suite are never accidentally tracked.
+- `.gitignore` (root): added `horizon-cursor.txt` (written by the demo server's
+  Horizon streaming cursor, `packages/demo/src/server.ts` line
+  `CURSOR_FILE = path.resolve(__dirname, '../../horizon-cursor.txt')`) and
+  `testnet-proof-output.txt` (suggested tee target in `docs/testnet-proof.md`
+  Step 4).
+
+**Why:** `contracts/escrow/test_snapshots/` was an untracked directory after
+running `cargo test`. The two root-level runtime files could appear after running
+the demo server or the testnet proof script and would otherwise need to be manually
+unstaged. No tracked file was removed (none were tracked to begin with).
+
+**Tests:**
+```
+npm run lint        ✅ exit 0 (run 2026-11-22)
+npm run typecheck   ✅ exit 0 (run 2026-11-22)
+npm test -- --forceExit   ✅ 364 passed, 15 suites (run 2026-11-22)
+( cd contracts/escrow && cargo fmt --check )   ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
+    cargo clippy --locked --target wasm32v1-none -- -D warnings )  ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && cargo test --locked )  ✅ 35 passed, 0 failed (run 2026-11-22)
+```
+
+**Limits:** `.gitignore` rules do not prevent a developer from force-adding
+ignored files; they only suppress the default tracking and status noise.
+
+---
+
+### 2026-11-22 — docs/honest-docs-and-claims-audit (Task 3: deployment and proof docs)
+
+**Changes:**
+- `contracts/escrow/DEPLOY.md`:
+  - Build command: `cargo build --target wasm32v1-none --release` →
+    `cargo build --locked --target wasm32v1-none --release` (consistent with CI).
+  - Section 6 mainnet checklist: replaced "17 Rust + 34 TS tests" with real
+    counts (35 Rust / 364 TS as of 2026-11-22) and the exact commands.
+  - Section 7: removed stale "17/17 Rust tests + 34/34 TypeScript tests"
+    language and false "in this PR" framing; replaced with accurate current
+    counts, commands, dates, and a pointer to `docs/testnet-proof.md`.
+  - `stellar-cli` install command: already a binary download (`curl -L …
+    v28.1.0 … tar.gz`), not `cargo install`. Left as-is; added `--locked` to
+    the `cargo build` only.
+- `docs/testnet-proof.md`:
+  - Step 1 build command: `cargo build --target wasm32v1-none --release` →
+    `export SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=true && cargo
+    build --locked --target wasm32v1-none --release` (env var is required when
+    calling cargo directly for soroban-sdk; `--locked` matches CI).
+  - `cargo install --locked stellar-cli` (Prerequisite 2) → binary download
+    matching the v28.1.0 release that `contracts.yml` installs.
+  - "NOT YET RUN" markers in the Results section are unchanged.
+- `scripts/escrow-testnet-demo.ts`: verified against current validations (amount
+  > 0: `DEPOSIT_AMOUNT = '10000000'` ✓; payer ≠ merchant: separate random
+  keypairs ✓; no `timeoutLedgers` field sent so the router passes 0 / contract
+  uses `DEFAULT_TIMEOUT_LEDGERS` ✓). No changes needed.
+
+**Why:** `docs/testnet-proof.md` instructed `cargo install --locked stellar-cli`
+(slow, unversioned build) rather than the same binary download that CI uses.
+Both `docs/testnet-proof.md` and `DEPLOY.md` were missing `--locked` and the
+required `SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2` env var on `cargo
+build`. `DEPLOY.md` Section 7 still cited the old test counts (17/34).
+
+**Tests:**
+```
+npm run lint        ✅ exit 0 (run 2026-11-22)
+npm run typecheck   ✅ exit 0 (run 2026-11-22)
+npm test -- --forceExit   ✅ 364 passed, 15 suites (run 2026-11-22)
+( cd contracts/escrow && cargo fmt --check )   ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
+    cargo clippy --locked --target wasm32v1-none -- -D warnings )  ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && cargo test --locked )  ✅ 35 passed, 0 failed (run 2026-11-22)
+```
+Script parameters verified by reading `scripts/escrow-testnet-demo.ts` (lines 70,
+197–218, 241–243): amount positive, distinct keypairs, no timeout override.
+
+**Limits:** The script has not been run against a live testnet — that remains NOT
+YET RUN. Changes are documentation-only; no contract logic was changed.
+
+---
+
+### 2026-11-22 — docs/honest-docs-and-claims-audit (Task 2: security model and limitations)
+
+**Changes:**
+- `README.md`: added a "Security model and limitations" section listing, with
+  the implementing file for each item: non-custodial invariant
+  (`escrow-session.ts`, `checkout-router.ts`); in-memory session store
+  (`session-manager.ts`) loses state on restart but on-chain funds stay safe;
+  one token per escrow session pinned by the server with no contract token
+  whitelist (`escrow-router.ts` arg[3], `contracts/escrow/README.md`); no
+  arbitration and no partial refund/release; payer-chosen timeout validated by
+  the server (`escrow-router.ts`, `[1, 6307200]`) and the contract's
+  `MAX_TIMEOUT_LEDGERS`; CORS (`cors({ origin: CORS_ORIGIN })`, default `false`
+  = same-origin, in `packages/demo/src/server.ts`); rate limiting (60 req/min
+  per IP on all `/api` routes, `packages/demo/src/server.ts`); the optional
+  `SESSIONS_API_KEY` Bearer guard on `GET /api/sessions` (`checkout-router.ts`);
+  `RELEASE_API_KEY` with `crypto.timingSafeEqual` and 503 in production
+  (`escrow-router.ts`); CoinGecko price dependency with 3-minute TTL
+  (`DEFAULT_QUOTE_TTL_MS` in `packages/core/src/price-quote.ts`); and
+  "unaudited".
+- Checked each item against `SECURITY.md`: no contradictions found, so
+  `SECURITY.md` was not changed. (SECURITY.md is silent on the `/api/sessions`
+  guard, the CORS default and "unaudited"; its rate-limit note is consistent
+  with the code — the escrow routes are a subset of the `/api` limiter.)
+
+**Why:** The README's security/limitations facts were spread across the
+"Escrow trust model", "Known limitations" and SECURITY.md, and several
+behaviours (CORS default, the `/api/sessions` guard, the CoinGecko dependency,
+"unaudited") were not stated at all. One consolidated section, each item tied
+to its code location, makes the security posture auditable.
+
+**Tests:**
+```
+npm run lint        ✅ exit 0 (run 2026-11-22)
+npm run typecheck   ✅ exit 0 (run 2026-11-22)
+npm test -- --forceExit   ✅ 364 passed, 15 suites (run 2026-11-22)
+( cd contracts/escrow && cargo fmt --check )   ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
+    cargo clippy --locked --target wasm32v1-none -- -D warnings )  ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && cargo test --locked )  ✅ 35 passed, 0 failed (run 2026-11-22)
+```
+Each cited file/function was confirmed by reading the source:
+`InMemorySessionStore` in `session-manager.ts`; `CoinGeckoPriceSource` and
+`DEFAULT_QUOTE_TTL_MS = 3 * 60 * 1000` in `price-quote.ts`; `timingSafeEqual`
+and 503 in `escrow-router.ts`; `cors({ origin: CORS_ORIGIN })` with default
+`false` and `rateLimit({ windowMs: 60000, max: 60 })` on `/api` in
+`packages/demo/src/server.ts`; the `SESSIONS_API_KEY` Bearer guard in
+`checkout-router.ts`.
+
+**Limits:** This is documentation; the test suites do not assert README text.
+The behaviours are as implemented in the demo/server today; a production
+deployment may differ (different rate limits, a persistent store, a different
+`PriceSource`). The section does not change any code.
+
+---
+
+### 2026-11-22 — docs/honest-docs-and-claims-audit (Task 1: README accuracy)
+
+**Changes:**
+- `README.md`:
+  - Added a Contracts CI badge (`.github/workflows/contracts.yml`) next to the
+    existing JS/TS CI badge.
+  - "Soroban escrow — honest status" table: `Rust escrow contract` row 17 → 35
+    tests with the command `cargo test --locked`; removed stale per-component
+    counts (3/6/6/3) and "106 tests (2 suites)" in favour of "see CI badge".
+  - Replaced the false "The 17 Rust contract tests are written but not yet run
+    in CI — cargo is not available in the CI environment" with an accurate list
+    of what `contracts.yml` runs: `cargo fmt --check`,
+    `cargo clippy --locked --target wasm32v1-none -- -D warnings`,
+    `cargo test --locked`, and the
+    `cargo build --locked --target wasm32v1-none --release` WASM build (Rust
+    stable, `wasm32v1-none` target, stellar-cli v28.1.0).
+  - Added a "Contract behaviour (v0.2)" paragraph (links to
+    `contracts/escrow/README.md` instead of duplicating): deposit validation
+    errors 8 `InvalidAmount` / 9 `SameParty` / 10 `TimeoutTooLong` before any
+    transfer or storage write; `release`/`refund` write status before the token
+    transfer; `Deposited`/`Released`/`Refunded` events (refund carries
+    `caller`); TTL extension is not automatic and `extend_escrow_ttl` exists
+    for keepers.
+  - Added a "Timeout bounds" paragraph: the contract rejects `timeout_ledgers`
+    above `MAX_TIMEOUT_LEDGERS` (6,307,200 ≈ 1 year) with no minimum
+    (0 = use the `DEFAULT_TIMEOUT_LEDGERS` 518,400 ≈ 30 days); the HTTP router
+    additionally enforces a floor of `MIN_TIMEOUT_LEDGERS` (1) when
+    `timeoutLedgers` is supplied, and never sends 0 to the contract.
+  - Known-limitation #6: 106/2 suites → 138 escrow TS tests across 3 suites
+    with date and command; "17 Rust tests not yet run in CI" → 35 Rust tests
+    run in CI (`cargo test --locked`).
+  - Development section `npm test` count: 356 (2026-10-03) → 364 across 15
+    suites (2026-11-22).
+  - Testnet build command: `cargo build --target wasm32v1-none --release` →
+    `SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=true cargo build --locked
+    --target wasm32v1-none --release` (direct cargo builds of soroban-sdk need
+    the env var).
+  - Removed a duplicate `CHANGELOG.md` line in the project-structure tree.
+  - Kept "Not yet run on testnet" / "Not yet run" wording; added no claims of
+    audits, adoption, mainnet use or production readiness.
+
+**Why:** The README stated the Rust contract had 17 tests (it has 35), the TS
+suite had 356 tests (it has 364), that escrow tests were "106 in 2 suites", and
+— most misleadingly — that the Rust tests are "not yet run in CI" because
+"cargo is not available in the CI environment". `contracts.yml` does run
+fmt/clippy/test/WASM build, so those claims were false. Counts were hard-coded
+with a 2026-10-03 date, so they go stale.
+
+**Tests:**
+```
+npm run lint        ✅ exit 0 (run 2026-11-22)
+npm run typecheck   ✅ exit 0 (run 2026-11-22)
+npm test -- --forceExit   ✅ 364 passed, 15 suites (run 2026-11-22)
+( cd contracts/escrow && cargo fmt --check )   ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
+    cargo clippy --locked --target wasm32v1-none -- -D warnings )  ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && cargo test --locked )  ✅ 35 passed, 0 failed (run 2026-11-22)
+```
+The 35 Rust count and the contract/error/timeout facts were verified against
+`contracts/escrow/src/lib.rs` and `packages/server/src/escrow-router.ts`
+(`MAX_TIMEOUT_LEDGERS = 6_307_200`, `MIN_TIMEOUT_LEDGERS = 1`,
+`DEFAULT_TIMEOUT_LEDGERS = 518_400`). The escrow test count (138 across 3
+suites: `escrow-router.test.ts` 72, `escrow-session.test.ts` 39,
+`http-soroban-rpc-client.test.ts` 27) was read by running jest per file.
+
+**Limits:** The README is documentation; the test suites do not assert README
+text, so the numbers will go stale as tests are added — that is why the doc
+points to the CI badges and gives the commands to regenerate them. "Not yet
+run on testnet" reflects that no live testnet run has been recorded.
+
+---
+
 ### 2026-11-22 — fix/escrow-contract-hardening (Task 8: contract CI --locked)
 
 **Changes:**

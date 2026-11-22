@@ -21,6 +21,7 @@
      Tests (exact commands and real results), Limits (what the tests do not prove). -->
 
 - [ ] Entry added to `CHANGELOG.md` under `## [Unreleased]`
+- [ ] `bash scripts/check_claims.sh` passes (add rows to `docs/claims-audit.md` for any new behavioural claim)
 
 ## Testing
 
