@@ -12,6 +12,57 @@ checklist.
 
 ## [Unreleased]
 
+### 2026-11-22 — docs/honest-docs-and-claims-audit (Task 7: CI and contributor docs)
+
+**Changes:**
+- `.github/workflows/ci.yml`: added a "Claims audit check" step (`bash
+  scripts/check_claims.sh`) after the Test step. Runs on both Node 18 and 20
+  matrix legs. No action versions changed — `actions/checkout@v4`,
+  `actions/setup-node@v4`, `actions/upload-artifact@v4` were already current
+  (verified by reading `ci.yml`). `npm ci` was already the install command.
+- `CONTRIBUTING.md`:
+  - Rust test command updated: `cargo test --manifest-path
+    contracts/escrow/Cargo.toml` → `cargo test --manifest-path
+    contracts/escrow/Cargo.toml --locked` (matches `ci.yml`).
+  - Added a "Run the claims audit checker" subsection (`bash
+    scripts/check_claims.sh`) with a one-line explanation of what it checks.
+  - Pull request checklist: added `bash scripts/check_claims.sh` passes (or
+    new rows added to `docs/claims-audit.md` for new behavioural claims).
+- `.github/PULL_REQUEST_TEMPLATE.md`: added a second Changelog checklist line
+  for `bash scripts/check_claims.sh` passing.
+- `contracts/escrow/rust-toolchain.toml`: **NOT added.** Fmt, clippy, tests
+  and the WASM build were run with `rustup stable` in this session but the
+  exact semver was not captured. Adding a `rust-toolchain.toml` with a pinned
+  version I cannot verify would be a false claim. The toolchain is pinned in
+  CI via `dtolnay/rust-toolchain@stable` in `contracts.yml`.
+
+**Why:** The CI `ci.yml` had no claims-check step, so a broken audit table
+would not be caught in PRs. `CONTRIBUTING.md` was missing the `--locked` flag
+on the Rust command, lacked instructions for the claims checker, and did not
+mention the claims-audit requirement in the PR checklist. The PR template had
+no checklist item for the claims audit.
+
+**Tests:**
+```
+bash scripts/check_claims.sh
+  ✅ 80 rows checked, all OK (run 2026-11-22)
+
+npm run lint        ✅ exit 0 (run 2026-11-22)
+npm run typecheck   ✅ exit 0 (run 2026-11-22)
+npm test -- --forceExit   ✅ 365 passed, 16 suites (run 2026-11-22)
+( cd contracts/escrow && cargo fmt --check )   ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
+    cargo clippy --locked --target wasm32v1-none -- -D warnings )  ✅ exit 0 (run 2026-11-22)
+( cd contracts/escrow && cargo test --locked )  ✅ 35 passed, 0 failed (run 2026-11-22)
+```
+
+**Limits:** The claims-check CI step proves `check_claims.sh` exits 0 on the
+branch; it does not run the named tests themselves. `rust-toolchain.toml` was
+not added; the Rust version in CI is determined by `dtolnay/rust-toolchain@stable`
+at the time the workflow runs.
+
+---
+
 ### 2026-11-22 — docs/honest-docs-and-claims-audit (Task 6: claims audit)
 
 **Changes:**
