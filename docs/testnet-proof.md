@@ -49,7 +49,7 @@ This file records the live testnet run of the StellarFlow Soroban escrow integra
    stellar --version  # stellar 30.0.1
    ```
 
-3. Node.js ≥ 18 and this repo's dependencies:
+3. Node.js ≥ 22.12 and this repo's dependencies:
    ```bash
    npm install
    ```

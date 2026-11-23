@@ -12,6 +12,25 @@ checklist.
 
 ## [Unreleased]
 
+### 2026-11-23 — docs/node-version-fix
+
+**Changes:**
+- `docs/testnet-proof.md` line 52: changed "Node.js ≥ 18" to "Node.js ≥ 22.12".
+
+**Why:** Every `package.json` in the repo declares `engines.node >=22.12.0`, `.nvmrc` pins 22, and CI runs Node 22.x only (`@stellar/stellar-sdk@17` requires it). The Prerequisites section of the testnet proof doc was the sole remaining instance of the old ≥ 18 floor.
+
+**Tests:**
+```
+npm run lint                  ✅ exit 0
+npm run typecheck             ✅ exit 0
+npm test -- --forceExit       ✅ 395 passed, 18 suites
+bash scripts/check_claims.sh  ✅ 93 rows, all OK
+```
+
+**Limits:** Docs-only change. No code, contract, or workflow altered.
+
+---
+
 ### 2026-11-23 — docs/testnet-verification (Task 5: changelog entries)
 
 **Changes:**
