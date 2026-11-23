@@ -4,7 +4,7 @@
  * Tests for the Horizon record parser (pure unit tests, no network calls)
  * and the CursorStore implementations.
  *
- * stellar-sdk v12 naming:
+ * @stellar/stellar-sdk naming:
  *   'payment'                  → standard payment
  *   'path_payment'             → path payment strict receive (legacy name in SDK)
  *   'path_payment_strict_send' → path payment strict send
@@ -18,7 +18,7 @@ import {
   InMemoryCursorStore,
   FileCursorStore,
 } from '../horizon-listener';
-import type { Horizon } from 'stellar-sdk';
+import type { Horizon } from '@stellar/stellar-sdk';
 
 const MERCHANT = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
 const CUSTOMER = 'GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN';
@@ -113,7 +113,7 @@ describe('parseHorizonRecord', () => {
   });
 
   it('parses path_payment (strict receive) operation', () => {
-    // In stellar-sdk v12, PathPaymentOperationRecord has type 'path_payment_strict_receive'
+    // In @stellar/stellar-sdk, PathPaymentOperationRecord has type 'path_payment_strict_receive'
     const record = {
       type: 'path_payment_strict_receive',
       id: '12345',
@@ -133,7 +133,7 @@ describe('parseHorizonRecord', () => {
   });
 
   it('parses path_payment_strict_send operation using amount (destination amount)', () => {
-    // In stellar-sdk v12, PathPaymentStrictSendOperationRecord has:
+    // In @stellar/stellar-sdk, PathPaymentStrictSendOperationRecord has:
     //   amount = what destination receives (not source_amount)
     //   asset_type/code/issuer = destination asset
     const record = {

@@ -93,7 +93,7 @@ who run a separate backend.
 `onWebhook()`. It POSTs the event as JSON and sets
 `X-StellarFlow-Signature: sha256=<hex>`, the HMAC-SHA256 of the exact raw body
 bytes, using Node's built-in `crypto`. No new dependencies; use the global `fetch`
-(Node 18+), injectable for tests. Export it from `packages/server/src/index.ts`.
+(Node 22.12+), injectable for tests. Export it from `packages/server/src/index.ts`.
 
 ### Acceptance criteria
 

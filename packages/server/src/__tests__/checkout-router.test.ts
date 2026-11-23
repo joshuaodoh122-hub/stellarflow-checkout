@@ -10,7 +10,7 @@
  *
  * Uses supertest against a real Express app instance (no live network calls —
  * QuoteService and Horizon are mocked). Stellar tx XDRs are constructed with
- * the real stellar-sdk so XDR parsing exercises the actual code path.
+ * the real @stellar/stellar-sdk so XDR parsing exercises the actual code path.
  *
  * What is NOT tested here (covered elsewhere):
  *   - XDR validation logic detail (submit-validation.test.ts)
@@ -27,7 +27,7 @@ import {
   Operation,
   Memo,
   Account,
-} from 'stellar-sdk';
+} from '@stellar/stellar-sdk';
 import { createCheckoutRouter } from '../checkout-router';
 import { SessionManager, InMemorySessionStore } from '../session-manager';
 import { QuoteService, CoinGeckoPriceSource } from '@stellarflow/core';
@@ -404,7 +404,7 @@ describe('POST /api/checkout/:orderId/submit', () => {
   // The submit endpoint parses XDR and validates it, then calls
   // horizonServer.submitTransaction(). We can test all the validation
   // paths without a live Horizon by injecting bad XDR or wrong fields.
-  // For the happy path we mock stellar-sdk's Horizon.Server.
+  // For the happy path we mock @stellar/stellar-sdk's Horizon.Server.
 
   it('returns 400 for a non-numeric orderId', async () => {
     const { app } = buildApp();

@@ -53,7 +53,7 @@
  */
 
 import fetch from 'node-fetch';
-import { Keypair, TransactionBuilder, Networks } from 'stellar-sdk';
+import { Keypair, TransactionBuilder, Networks } from '@stellar/stellar-sdk';
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 

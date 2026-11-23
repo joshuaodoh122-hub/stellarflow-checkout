@@ -7,7 +7,7 @@
  * (unsigned — sequence number doesn't matter for validation logic) and
  * asserting the expected rejection reason for each tampered variant.
  *
- * These tests use the real stellar-sdk to construct XDR envelopes so they
+ * These tests use the real @stellar/stellar-sdk to construct XDR envelopes so they
  * exercise the actual parsing path, not a mock.
  */
 
@@ -18,7 +18,7 @@ import {
   Operation,
   Memo,
   Account,
-} from 'stellar-sdk';
+} from '@stellar/stellar-sdk';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

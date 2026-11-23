@@ -4,7 +4,7 @@
  * TypeScript tests for EscrowCheckoutSession and EscrowClient.
  *
  * All Soroban RPC calls are mocked — no network calls are made.
- * This is consistent with how the existing Horizon tests mock stellar-sdk.
+ * This is consistent with how the existing Horizon tests mock @stellar/stellar-sdk.
  *
  * What is tested:
  *   - Full session lifecycle: pending → deposit confirmed → merchant releases → fulfilled

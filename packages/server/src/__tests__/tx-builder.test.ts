@@ -7,14 +7,14 @@
  * Horizon is mocked so these tests run without a network connection.
  * We verify the structure of the built transaction (destination, asset,
  * amount, memo, timebounds) by deserialising the returned XDR with the
- * stellar-sdk and inspecting the operation and memo fields.
+ * @stellar/stellar-sdk and inspecting the operation and memo fields.
  */
 
 import {
   TransactionBuilder,
   Networks,
   Operation,
-} from 'stellar-sdk';
+} from '@stellar/stellar-sdk';
 import { buildPaymentTx } from '../tx-builder';
 import type { CheckoutSession } from '@stellarflow/core';
 
@@ -27,11 +27,11 @@ const NETWORK_PASSPHRASE = Networks.TESTNET;
 
 // ─── Horizon mock ─────────────────────────────────────────────────────────────
 //
-// stellar-sdk's Horizon.Server is a class. We mock it at the module level so
+// @stellar/stellar-sdk's Horizon.Server is a class. We mock it at the module level so
 // buildPaymentTx (which imports and instantiates it internally) gets the mock.
 
-jest.mock('stellar-sdk', () => {
-  const actual = jest.requireActual<typeof import('stellar-sdk')>('stellar-sdk');
+jest.mock('@stellar/stellar-sdk', () => {
+  const actual = jest.requireActual<typeof import('@stellar/stellar-sdk')>('@stellar/stellar-sdk');
 
   // A minimal mock account that the real TransactionBuilder can work with
   const mockAccount = new actual.Account(
@@ -182,7 +182,7 @@ describe('buildPaymentTx — fee and options', () => {
   });
 
   it('falls back gracefully when feeStats throws', async () => {
-    const { Horizon } = jest.requireMock<typeof import('stellar-sdk')>('stellar-sdk');
+    const { Horizon } = jest.requireMock<typeof import('@stellar/stellar-sdk')>('@stellar/stellar-sdk');
     const mockInstance = (Horizon.Server as jest.Mock).mock.results.at(-1)?.value;
     if (mockInstance) {
       mockInstance.feeStats.mockRejectedValueOnce(new Error('fee stats unavailable'));
