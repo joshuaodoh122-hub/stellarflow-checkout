@@ -48,6 +48,14 @@ The test-name column uses backticks for every name that `scripts/check_claims.sh
 | SDK XDR parse error → raw fallback reads status → FAILED throws TX_FAILED | README.md § Known limitations #7 | `escrow-session.ts` `submitSignedTx` | `SDK throws Bad union switch → raw fallback FAILED → throws TX_FAILED` | VERIFIED |
 | Both SDK and raw fallback failing → POLL_TIMEOUT with last error text | README.md § Known limitations #7 | `escrow-session.ts` `submitSignedTx` | `SDK and raw fallback both keep failing → POLL_TIMEOUT with last error text` | VERIFIED |
 | Live read-only testnet checks pass (getTransaction SUCCESS; simulateTransaction getEscrow NotFound) | README.md § Known limitations #6 | — (manual live checks against testnet; not unit tests) | Run 2026-11-23 against the deployed testnet contract; real output recorded in CHANGELOG.md Task 3 | REWORDED |
+| Status decoding tested with real SDK-built shapes | README.md § Known limitations #8 | `escrow-session.ts` `_decodeEscrowRecord` | `decodes Held status from scvVec(["Held"]) to EscrowRecord.status = "Held"` | VERIFIED |
+| Released status decoded from scvVec(["Released"]) | README.md § Known limitations #8 | `escrow-session.ts` `_decodeEscrowRecord` | `decodes Released status from scvVec(["Released"]) to EscrowRecord.status = "Released"` | VERIFIED |
+| Refunded status decoded from scvVec(["Refunded"]) | README.md § Known limitations #8 | `escrow-session.ts` `_decodeEscrowRecord` | `decodes Refunded status from scvVec(["Refunded"]) to EscrowRecord.status = "Refunded"` | VERIFIED |
+| Invalid status shape (empty array) throws SIMULATION_FAILED | README.md § Known limitations #8 | `escrow-session.ts` `_decodeEscrowRecord` | `throws SIMULATION_FAILED with offending value for empty-array status []` | VERIFIED |
+| Invalid status shape (two elements) throws SIMULATION_FAILED | README.md § Known limitations #8 | `escrow-session.ts` `_decodeEscrowRecord` | `throws SIMULATION_FAILED with offending value for two-element array ["Held","Extra"]` | VERIFIED |
+| Invalid status shape (unknown tag) throws SIMULATION_FAILED | README.md § Known limitations #8 | `escrow-session.ts` `_decodeEscrowRecord` | `throws SIMULATION_FAILED with offending value for unknown tag ["Pending"]` | VERIFIED |
+| scValToNative shape contract pinned by SDK sanity suite | README.md § Known limitations #8 | `escrow-status-decoding.test.ts` sanity suite | `scvVec([scvSymbol("Held")]) → ["Held"] (single-element string array)` | VERIFIED |
+| EscrowClient.getEscrow full decode path returns correct record | README.md § Known limitations #8 | `escrow-session.ts` / `EscrowClient.getEscrow` | `getEscrow returns correct EscrowRecord for a Held escrow from real ScVal` | VERIFIED |
 | 35 Rust contract tests (as of 2026-11-22) | README.md § Soroban escrow honest status | `contracts/escrow/src/lib.rs` | Count verified by running `cargo test --locked` on 2026-11-22; command and date in README | REWORDED |
 | Contract CI runs fmt, clippy, test, WASM build | README.md § Soroban escrow honest status | `.github/workflows/contracts.yml` | CI workflow file verified by reading `.github/workflows/contracts.yml` | REWORDED |
 
@@ -149,4 +157,4 @@ The test-name column uses backticks for every name that `scripts/check_claims.sh
 
 ---
 
-*Last updated: 2026-11-22. Run `scripts/check_claims.sh` to verify all backtick-quoted test names still exist.*
+*Last updated: 2026-11-23. Run `scripts/check_claims.sh` to verify all backtick-quoted test names still exist.*
