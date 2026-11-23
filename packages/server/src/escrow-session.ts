@@ -664,14 +664,26 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
     let status: EscrowStatus;
     const rawStatus = rec['status'];
     if (typeof rawStatus === 'string' && (rawStatus === 'Held' || rawStatus === 'Released' || rawStatus === 'Refunded')) {
+      // Shape: plain string (legacy / hand-assembled mocks)
       status = rawStatus;
     } else if (typeof rawStatus === 'object' && rawStatus !== null && 'tag' in rawStatus) {
+      // Shape: { tag: 'Held' | ... } (alternative SDK representation)
       const tag = (rawStatus as { tag: string }).tag;
       if (tag === 'Held' || tag === 'Released' || tag === 'Refunded') {
         status = tag;
       } else {
         throw new EscrowRpcError('SIMULATION_FAILED', `Unknown escrow status tag: ${tag}`);
       }
+    } else if (
+      Array.isArray(rawStatus) &&
+      rawStatus.length === 1 &&
+      typeof rawStatus[0] === 'string' &&
+      (rawStatus[0] === 'Held' || rawStatus[0] === 'Released' || rawStatus[0] === 'Refunded')
+    ) {
+      // Shape: ['Held' | 'Released' | 'Refunded'] — real on-chain shape.
+      // scValToNative renders a Soroban unit-variant enum as a one-element
+      // array of the variant name (e.g. scvVec([scvSymbol('Held')]) → ['Held']).
+      status = rawStatus[0];
     } else {
       throw new EscrowRpcError('SIMULATION_FAILED', `Cannot decode escrow status: ${JSON.stringify(rawStatus)}`);
     }

@@ -12,6 +12,92 @@ checklist.
 
 ## [Unreleased]
 
+### 2026-11-23 — fix/escrow-status-decoding (Tasks 1–3: status decode fix, pattern audit)
+
+**Changes:**
+- `packages/server/src/escrow-session.ts` `_decodeEscrowRecord`: added a third
+  branch accepting a one-element string array `['Held' | 'Released' | 'Refunded']`.
+  `scValToNative` renders a Soroban unit-variant enum as `scvVec([scvSymbol(tag)])`,
+  which decodes to `['tag']` — a shape the previous code did not handle, causing
+  `400 SIMULATION_FAILED: Cannot decode escrow status: ["Held"]` after every
+  successful testnet deposit. The fix accepts: plain string (legacy/mock path),
+  `{ tag }` object (alternative SDK representation), and `['Held'|'Released'|'Refunded']`
+  (real on-chain shape). Arrays with length ≠ 1, arrays whose element is not a
+  known tag, and all other shapes still throw `SIMULATION_FAILED` with the
+  offending value in the message.
+- `packages/server/src/__tests__/escrow-status-decoding.test.ts`: 23 new tests
+  in three suites. All inputs are built from the real SDK (`xdr`, `nativeToScVal`,
+  `scValToNative`) — no hand-written mock objects. Covers:
+  - `Held`, `Released`, `Refunded` status via `simulateContract` path
+  - full numeric/address field round-trip for a Held record
+  - invalid shapes: empty array `[]`, two-element array, unknown tag `['Pending']`,
+    numeric `42`, null — all throw `SIMULATION_FAILED` with the value in the message
+  - public path: `EscrowClient.getEscrow` → `HttpSorobanRpcClient.simulateContract`
+    → `scValToNative` → decoder → correct `EscrowRecord` for all three statuses
+    and one error case
+  - SDK sanity suite: 9 assertions confirming the shapes that `scValToNative`
+    returns for each field type (vec, i128, address, u32, bytes), so a future
+    SDK upgrade that changes shapes will fail here before the decoder breaks
+
+**Why:** The contract's `EscrowStatus` is a unit-variant Rust enum. `scValToNative`
+in `@stellar/stellar-sdk@17` decodes `scvVec([scvSymbol('Held')])` as `['Held']`
+(a one-element string array), not a plain string or `{ tag }` object. The existing
+unit tests mocked `rpc.simulateContract` to return an already-decoded `EscrowRecord`
+struct, so `_decodeEscrowRecord` was never exercised with the real on-chain shape,
+and the bug shipped silently.
+
+**Task 3 — scValToNative / decodeScVal pattern audit**
+
+Every call site in `packages/server/src/**`, `packages/core/src/**`, and `scripts/**`
+that interprets a value from `scValToNative` or `decodeScVal` was checked against
+the real SDK output (verified by running `node -e` probes):
+
+| Call site | Field / type | Real SDK output | Code expectation | Verdict |
+|---|---|---|---|---|
+| `escrow-session.ts` `_decodeEscrowRecord` `status` | `scvVec([scvSymbol])` | `['Held']` etc. | string \| `{tag}` \| **array** | **Fixed (this PR)** |
+| `escrow-session.ts` `_decodeEscrowRecord` `amount` | `scvI128(n)` | `bigint` | `BigInt(rec.amount)` | Correct |
+| `escrow-session.ts` `_decodeEscrowRecord` `payer/merchant/token` | `scvAddress` | `string` | `typeof === 'string'` | Correct |
+| `escrow-session.ts` `_decodeEscrowRecord` `deposited_at/timeout_ledgers` | `scvU32` | `number` | `Number(rec.x)` | Correct |
+| `escrow-session.ts` `_encodeArg` bigint → i128 | `nativeToScVal(n, {type:'i128'})` | produces `scvI128` | pass-through to SDK | Correct |
+| `escrow-session.ts` `_encodeArg` number → u32 | `nativeToScVal(n, {type:'u32'})` | produces `scvU32` | pass-through to SDK | Correct |
+| `escrow-session.ts` `_encodeArg` G.../C... → address | `nativeToScVal(s, {type:'address'})` | produces `scvAddress` | pass-through to SDK | Correct |
+| `escrow-session.ts` `_encodeArg` 64-hex → bytes | `nativeToScVal(buf, {type:'bytes'})` | produces `scvBytes` | pass-through to SDK | Correct |
+| `escrow-router.ts` `decodeScVal` `arg[0]` payer (Address) | `scvAddress` → string | `typeof !== 'string'` guard | Correct |
+| `escrow-router.ts` `decodeScVal` `arg[1]` merchant (Address) | `scvAddress` → string | `typeof !== 'string'` guard | Correct |
+| `escrow-router.ts` `decodeScVal` `arg[2]` amount (i128) | `scvI128` → `bigint` | `typeof !== 'bigint'` guard | Correct |
+| `escrow-router.ts` `decodeScVal` `arg[3]` token (Address) | `scvAddress` → string | `typeof !== 'string'` guard | Correct |
+| `escrow-router.ts` `decodeScVal` `arg[4]` order_id (bytes) | `scvBytes` → `Uint8Array` (not `Buffer`) | `instanceof Uint8Array` branch | Correct (`Buffer.isBuffer` is false; the `Uint8Array` branch catches it) |
+| `escrow-router.ts` `decodeScVal` `arg[5]` timeout_ledgers (u32) | `scvU32` → `number` | `typeof !== 'number'` guard | Correct |
+| `escrow-router.ts` `decodeScVal` release `arg[0]` order_id (bytes) | `scvBytes` → `Uint8Array` | `instanceof Uint8Array` branch | Correct |
+| `escrow-router.ts` `decodeScVal` refund `arg[0]` order_id, `arg[1]` caller | bytes, address | Uint8Array, string | Correct |
+| `escrow-router.ts` reconcile `record.status` | already-decoded `EscrowStatus` string from `_decodeEscrowRecord` | string | passed to `escrowRecordToSessionStatus` switch | Correct (after this fix) |
+| `escrow-router.ts` `verifyOnChainRecord` payer/merchant/amount/token | already-decoded `EscrowRecord` fields | string/bigint | direct comparison | Correct |
+| `scripts/escrow-testnet-demo.ts` | reads JSON API only; no direct `scValToNative` call | — | — | N/A |
+| `packages/core/src/**` | no `scValToNative` or `decodeScVal` calls | — | — | N/A |
+
+No other mismatches found. All `decodeScVal` guard conditions match the real SDK
+output types verified by live probes.
+
+**Tests:**
+```
+npx jest packages/server/src/__tests__/escrow-status-decoding.test.ts --forceExit
+  ✅ 23 passed (run 2026-11-23) — 7 were red before the fix, all green after
+npm test -- --forceExit   ✅ 395 passed, 18 suites (run 2026-11-23)
+npm run lint              ✅ exit 0
+npm run typecheck         ✅ exit 0
+```
+Rust (`cargo fmt --check`, `cargo clippy`, `cargo test`): **NOT RUN** — `cargo`
+not installed; contract not modified.
+
+**Limits:** Tests mock `rpc.Server.simulateTransaction` returning an in-process
+`xdr.ScVal` object — no real network. The SDK sanity suite pins the `scValToNative`
+output shapes; a future SDK upgrade that changes them will cause test failures
+before the decoder breaks. The `decodeScVal` usages in `escrow-router.ts` are
+tested via the submit-validation tests (using real-XDR paths); the new audit rows
+in the claims table are cited below.
+
+---
+
 ### 2026-11-23 — fix/rpc-poll-and-sdk-upgrade (Task 4: docs and claims)
 
 **Changes:**
