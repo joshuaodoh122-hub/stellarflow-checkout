@@ -89,7 +89,7 @@ and deployed as a Soroban contract. It implements a fund-holding escrow:
 - `get_escrow(order_id)` — read-only; returns the on-chain escrow record.
 
 The TypeScript integration (`HttpSorobanRpcClient`) uses
-[`stellar-sdk@12`](https://www.npmjs.com/package/stellar-sdk)'s `SorobanRpc.Server`
+[`@stellar/stellar-sdk@^17`](https://www.npmjs.com/package/@stellar/stellar-sdk)'s `rpc.Server`
 to build, simulate, and submit contract transactions.
 
 **Non-custodial design:** The server constructs unsigned XDR transactions and returns
@@ -99,7 +99,7 @@ them to the caller's wallet for signing. The server never holds a private key.
 - [Soroban overview](https://developers.stellar.org/docs/smart-contracts)
 - [Soroban SDK (Rust)](https://developers.stellar.org/docs/smart-contracts/getting-started/setup)
 - [Soroban RPC](https://developers.stellar.org/docs/data/rpc)
-- [stellar-sdk Soroban guide](https://stellar.github.io/js-stellar-sdk/)
+- [@stellar/stellar-sdk guide](https://stellar.github.io/js-stellar-sdk/)
 
 ---
 

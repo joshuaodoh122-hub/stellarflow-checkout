@@ -43,6 +43,11 @@ The test-name column uses backticks for every name that `scripts/check_claims.sh
 | amount == 0 rejected at server | README.md § Escrow trust model | `escrow-router.ts` `POST /api/escrow` | `400 when amount is zero` | VERIFIED |
 | In-flight guard: concurrent duplicate submit rejected 409 | README.md § Escrow trust model | `escrow-router.ts` in-flight Set | `409 on concurrent duplicate (in-flight guard)` | VERIFIED |
 | POLL_TIMEOUT leaves session pending (retryable) | README.md § Session lifecycle | `escrow-router.ts` POLL_TIMEOUT catch | `session stays pending after POLL_TIMEOUT (retryable)` | VERIFIED |
+| SDK getTransaction errors are logged once; not silently swallowed | README.md § Known limitations #7 | `escrow-session.ts` `submitSignedTx` | `SDK throws Bad union switch → raw fallback SUCCESS → returns { txHash }` | VERIFIED |
+| SDK XDR parse error (Bad union switch) → raw fallback reads status → SUCCESS returned | README.md § Known limitations #7 | `escrow-session.ts` `submitSignedTx` | `SDK throws Bad union switch → raw fallback SUCCESS → returns { txHash }` | VERIFIED |
+| SDK XDR parse error → raw fallback reads status → FAILED throws TX_FAILED | README.md § Known limitations #7 | `escrow-session.ts` `submitSignedTx` | `SDK throws Bad union switch → raw fallback FAILED → throws TX_FAILED` | VERIFIED |
+| Both SDK and raw fallback failing → POLL_TIMEOUT with last error text | README.md § Known limitations #7 | `escrow-session.ts` `submitSignedTx` | `SDK and raw fallback both keep failing → POLL_TIMEOUT with last error text` | VERIFIED |
+| Live read-only testnet checks pass (getTransaction SUCCESS; simulateTransaction getEscrow NotFound) | README.md § Known limitations #6 | — (manual live checks against testnet; not unit tests) | Run 2026-11-23 against the deployed testnet contract; real output recorded in CHANGELOG.md Task 3 | REWORDED |
 | 35 Rust contract tests (as of 2026-11-22) | README.md § Soroban escrow honest status | `contracts/escrow/src/lib.rs` | Count verified by running `cargo test --locked` on 2026-11-22; command and date in README | REWORDED |
 | Contract CI runs fmt, clippy, test, WASM build | README.md § Soroban escrow honest status | `.github/workflows/contracts.yml` | CI workflow file verified by reading `.github/workflows/contracts.yml` | REWORDED |
 

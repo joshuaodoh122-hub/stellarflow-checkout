@@ -39,9 +39,9 @@ StellarFlow supports two independent checkout modes. They can run on the same se
 | Testnet proof script | ✅ written, typechecks | `scripts/escrow-testnet-demo.ts` |
 | Live testnet run | ⏳ **Not yet run** — requires a deployed contract + funded accounts | See below |
 
-Counts are not hard-coded per component to avoid staleness. As of 2026-11-22 the
+Counts are not hard-coded per component to avoid staleness. As of 2026-11-23 the
 suite was **35 Rust contract tests** (`cargo test --locked` in `contracts/escrow`)
-and **364 TypeScript tests across 15 suites** (`npm test`). For the current
+and **372 TypeScript tests across 17 suites** (`npm test`). For the current
 numbers see the CI badges at the top of this file, or regenerate them:
 
 ```bash
@@ -107,9 +107,9 @@ After the deposit transaction confirms on-chain, `getEscrow()` is called and the
 - No third-party arbitration — if merchant claims fulfilment and payer disagrees, payer must wait for timeout
 - Single token per order — one SAC token contract per escrow
 - Session store is in-memory — server restart loses escrow session state (same limitation as classic checkout)
-- The contract is exercised in CI (fmt, clippy, tests, WASM build — see the Contracts CI badge above); it is not yet deployed to testnet
+- The contract is exercised in CI (fmt, clippy, tests, WASM build — see the Contracts CI badge above). Live **read-only** testnet checks pass against a deployed instance (see limitation #6); the full signed-transaction demo (`scripts/escrow-testnet-demo.ts`) is not run by CI
 
-**Soroban SDK note:** This integration uses `stellar-sdk@12.3.0` (already in the repo) which ships full Soroban support (`SorobanRpc.Server`, `Contract`, `nativeToScVal`, `scValToNative`, `assembleTransaction`). A separate `@stellar/stellar-sdk` package is not needed and was not added.
+**Soroban SDK note:** This integration uses `@stellar/stellar-sdk@^17.4.0` which ships full Soroban support (`rpc.Server`, `Contract`, `nativeToScVal`, `scValToNative`, `rpc.assembleTransaction`). The package is listed as a dependency of `@stellarflow/core` and all server and script imports use this package.
 
 ---
 
@@ -271,8 +271,8 @@ Full rationale in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 | Tool | Version | Install |
 |------|---------|---------|
-| Node.js | ≥ 18 | [nodejs.org](https://nodejs.org) |
-| npm | ≥ 9 | bundled with Node |
+| Node.js | ≥ 22.12 | [nodejs.org](https://nodejs.org) |
+| npm | ≥ 10 | bundled with Node |
 | A funded Stellar testnet account | — | [Stellar Laboratory](https://laboratory.stellar.org/#account-creator) |
 
 ### 1. Clone and install
@@ -462,7 +462,7 @@ npm install        # install all workspace dependencies
 npm run build      # compile all TypeScript packages
 npm run typecheck  # type-check without emitting
 npm run lint       # ESLint
-npm test           # run all tests (see CI badge; 364 across 15 suites as of 2026-11-22)
+npm test           # run all tests (see CI badge; 372 across 17 suites as of 2026-11-23)
 npm run test:coverage  # with coverage report
 ```
 
@@ -504,13 +504,25 @@ cd packages/server && npm test
    `expiresAt` need a manual query to resolve. A background sweep is a documented
    stretch goal.
 
-6. **Soroban escrow: tested against a mocked network only.** The server validates every
-   XDR argument and verifies the on-chain record after confirmation (against a mock). As
-   of 2026-11-22 there were 138 escrow TypeScript tests across 3 suites (`npm test`; see
-   the CI badge for current totals) and 35 Rust contract tests run in CI
-   (`cargo test --locked`). Neither has been run against a live testnet — that requires
-   a deployed contract and funded accounts. See the [Soroban escrow — honest status](#soroban-escrow--honest-status-v02)
+6. **Soroban escrow: unit-tested against mocks; live read-only checks done.** The server
+   validates every XDR argument and verifies the on-chain record after confirmation
+   (against a mock). As of 2026-11-23 there were 143 escrow TypeScript tests across
+   3 suites (`npm test`; see the CI badge for current totals) and 35 Rust contract
+   tests run in CI (`cargo test --locked`). Live **read-only** checks were run against
+   the deployed testnet contract on 2026-11-23: `getTransaction` for a real confirmed
+   testnet hash returns `SUCCESS` (verifying `@stellar/stellar-sdk` parses current
+   testnet responses), and `simulateTransaction` of `get_escrow` for a random order id
+   returns a clean `NotFound` contract error (code 2). The full deposit/release/refund
+   flow (signed transactions) has **not** been run against a live testnet — that
+   requires a funded account and submitting a signed transaction. See the [Soroban escrow — honest status](#soroban-escrow--honest-status-v02)
    section above.
+
+7. **Confirmation polling falls back to raw RPC status on SDK parse errors.** When the
+   SDK's `getTransaction` throws (for example due to XDR metadata formats it cannot parse),
+   `submitSignedTx` falls back to a plain JSON-RPC `getTransaction` call that reads only
+   the `result.status` string and never decodes XDR. The last error seen on either path
+   is included in the `POLL_TIMEOUT` detail if the deadline expires before a final status
+   is reached.
 
 ---
 
@@ -518,7 +530,7 @@ cd packages/server && npm test
 
 | Version | Feature |
 |---|---|
-| v0.2 | Soroban escrow checkout (built & tested against mocked network — live testnet deploy pending) |
+| v0.2 | Soroban escrow checkout (built & unit-tested against mocks; live read-only testnet checks pass; full signed-tx demo not run by CI) |
 | v0.2 (future) | Escrow: partial releases/refunds (all-or-nothing in current version) |
 | v0.2 (future) | Escrow: third-party arbitration (no arbiter role in current version) |
 | v0.3 | Reflector on-chain price oracle (`ReflectorPriceSource` via `PriceSource` interface) |
@@ -538,7 +550,7 @@ stellarflow-checkout/
 │   ├── widget/      # @stellarflow/widget — vanilla JS embeddable widget
 │   └── demo/        # @stellarflow/demo — reference storefront
 ├── .github/
-│   └── workflows/   # CI: lint, typecheck, test (Node 18 + 20 matrix)
+│   └── workflows/   # CI: lint, typecheck, test (Node 22 matrix)
 ├── ARCHITECTURE.md
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md

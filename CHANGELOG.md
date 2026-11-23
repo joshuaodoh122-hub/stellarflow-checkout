@@ -12,6 +12,66 @@ checklist.
 
 ## [Unreleased]
 
+### 2026-11-23 — fix/rpc-poll-and-sdk-upgrade (Task 4: docs and claims)
+
+**Changes:**
+- `README.md`: corrected the "Soroban SDK note" (was "`stellar-sdk@12.3.0` … a
+  separate `@stellar/stellar-sdk` is not needed and was not added") to
+  `@stellar/stellar-sdk@^17.4.0`. Added Known limitation #7 (confirmation
+  polling falls back to the raw RPC status and reports the last error on
+  timeout). Updated prerequisites (Node ≥ 22.12, npm ≥ 10), the CI matrix
+  line (Node 22), the test counts (372 TS across 17 suites; 143 escrow across
+  3 suites; 2026-11-23), limitation #6 (live read-only checks done; full
+  signed flow not run by CI), the v0.2 roadmap row, and the "honest status"
+  bullet (a testnet instance is deployed; live read-only checks pass).
+- `docs/ecosystem.md`: `stellar-sdk@12`/`SorobanRpc.Server` →
+  `@stellar/stellar-sdk@^17`/`rpc.Server`; link text corrected.
+- `SECURITY.md`: `stellar-sdk` → `@stellar/stellar-sdk`.
+- `contracts/escrow/DEPLOY.md`: updated the deployment-status note (a
+  testnet instance is deployed; live read-only checks pass) and counts (372 TS).
+- `docs/good-first-issues.md`: "(Node 18+)" → "(Node 22.12+)".
+- `.github/ISSUE_TEMPLATE/bug_report.yml`: placeholder Node/npm → 22.x/10.x.
+- Source/test comments: `stellar-sdk` → `@stellar/stellar-sdk` and dropped
+  stale "v12" qualifiers (`packages/core/src/horizon-listener.ts` and the
+  test files). No behaviour change.
+- `docs/claims-audit.md`: added four VERIFIED rows for the polling behaviour
+  (each citing the matching new test) and one REWORDED row for the live
+  read-only check. The CI matrix change landed with the SDK upgrade commit
+  (Task 3) for Node-requirement consistency, so this task made no further CI
+  change.
+- `bash scripts/check_claims.sh` passes (85 rows).
+
+**Why:** Docs named the deprecated package and a stale Node matrix (18/20,
+both below the new ≥ 22.12 floor). The README limitation section needed the
+polling-fallback behaviour documented. The live read-only checks performed
+in Task 3 disprove the prior "not yet deployed to testnet" / "tested against
+a mocked network only" wording for the read path, so those claims were
+corrected.
+
+**Tests:**
+```
+bash scripts/check_claims.sh   ✅ 85 rows, all OK (run 2026-11-23)
+npm run lint                   ✅ exit 0 (run 2026-11-23)
+npm run typecheck              ✅ exit 0 (run 2026-11-23)
+npm test -- --forceExit        ✅ 372 passed, 17 suites (run 2026-11-23)
+```
+Rust (`cargo fmt --check`,
+`cargo clippy --locked --target wasm32v1-none -- -D warnings` with
+`SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1`, `cargo test --locked`):
+**NOT RUN** — `cargo`/`rustc`/`rustup` are not installed in this environment.
+The contract (`contracts/escrow/src/lib.rs`) was not modified by this task,
+so Rust behaviour is unchanged; the last recorded result (CHANGELOG Task 8,
+2026-11-22) was 35 passed.
+
+**Limits:** CI was not executed here (no GitHub Actions run); the matrix
+change is config-only and `npm ci`/lint/typecheck/test pass locally on Node
+v24.22.2. The claims check proves the audit rows reference existing tests; it
+does not run those tests. The doc count updates (372/17, 143/3) were measured
+locally on 2026-11-23 and should be re-checked against the CI badge for the
+running totals.
+
+---
+
 ### 2026-11-23 — fix/rpc-poll-and-sdk-upgrade (Task 3: upgrade the Stellar SDK)
 
 **Changes:**

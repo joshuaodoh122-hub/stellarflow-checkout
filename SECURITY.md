@@ -202,7 +202,7 @@ sees a private key.
 
 **Threat:** A payer signs a deposit transaction with a different merchant, a smaller amount, a different token, a different `order_id`, or a different timeout, then submits it via `POST /api/escrow/:id/submit`. Without argument validation, the server would mark the session `deposited` even though the on-chain escrow does not match the agreed-upon order — the merchant could ship goods against an escrow worth almost nothing or belonging to a different session.
 
-**Mitigation (XDR argument validation):** The submit endpoint decodes the signed XDR with `stellar-sdk` and validates every argument before sending anything to the network. Checks (in order):
+**Mitigation (XDR argument validation):** The submit endpoint decodes the signed XDR with `@stellar/stellar-sdk` and validates every argument before sending anything to the network. Checks (in order):
 
 1. XDR parses as a `Transaction` (not `FeeBump`)
 2. Exactly one `invokeHostFunction` operation

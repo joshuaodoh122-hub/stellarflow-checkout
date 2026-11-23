@@ -45,8 +45,8 @@ body:
       label: Environment
       description: Node version, npm version, OS, Stellar network (testnet/mainnet).
       placeholder: |
-        Node: 20.x
-        npm: 9.x
+        Node: 22.x
+        npm: 10.x
         OS: Ubuntu 22.04
         Stellar network: testnet
     validations:

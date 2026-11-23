@@ -118,7 +118,7 @@ const client = new EscrowClient({
 
 Before deploying to mainnet:
 
-- [ ] Full testnet regression pass (run `cargo test --locked` in `contracts/escrow` and `npm test -- --forceExit` from the repo root; counts as of 2026-11-22: 35 Rust + 364 TS)
+- [ ] Full testnet regression pass (run `cargo test --locked` in `contracts/escrow` and `npm test -- --forceExit` from the repo root; counts as of 2026-11-23: 35 Rust + 372 TS)
 - [ ] Audit the contract for reentrancy, integer overflow, and storage exhaustion
 - [ ] Document the deployed contract ID in a project-controlled registry
 - [ ] Verify the WASM hash matches the source using:
@@ -142,12 +142,17 @@ stellar contract deploy \
 
 ## 7. No live testnet deployment yet
 
-**No live testnet contract deployment has been performed.** The contract has been
-built and tested locally (35 Rust tests, `cargo test --locked`, 2026-11-22; 364 TS
-tests, `npm test -- --forceExit`, 2026-11-22), and the CI workflow is configured to
-build and test it on every push. A live testnet deployment should be done as part of
-the v0.2 release process, following the steps in this document and recording the
-real output in `docs/testnet-proof.md`.
+**A testnet instance is deployed; live read-only checks pass.** An instance of the
+escrow contract is deployed on Stellar testnet and responds to live read-only calls —
+`getTransaction` for a real confirmed testnet hash returns `SUCCESS` (verifying
+`@stellar/stellar-sdk` parses current testnet responses), and `simulateTransaction`
+of `get_escrow` for a random order id returns a clean `NotFound` (code 2). See README
+§ Known limitations #6. The contract has been built and tested locally (35 Rust tests,
+`cargo test --locked`; 372 TS tests, `npm test -- --forceExit`, 2026-11-23), and the CI
+workflow is configured to build and test it on every push. The full signed-transaction
+end-to-end demo (`scripts/escrow-testnet-demo.ts`, deposit → release/refund with funded
+accounts) has not been run by the repo; run it following the steps in this document and
+record the real output in `docs/testnet-proof.md`.
 
 Do not fabricate contract IDs or claim a live deployment that has not actually been
 verified — see `docs/testnet-proof.md` which is currently marked NOT YET RUN.
