@@ -1,7 +1,6 @@
 # StellarFlow Checkout
 
-Open-source, non-custodial payment widget for the [Stellar network](https://stellar.org).
-Lets merchants accept **USDC** and **XLM** with ~5 second settlement and near-zero fees — without the 2–3%+ taken by traditional processors.
+Lets merchants accept USDC and XLM with Stellar's ~5 second finality and low network fees." You can make that edit by hand, or ask me for a tiny Kiro prompt for it.
  
 [![CI](https://github.com/joshuaodoh122-hub/stellarflow-checkout/actions/workflows/ci.yml/badge.svg)](https://github.com/joshuaodoh122-hub/stellarflow-checkout/actions/workflows/ci.yml)
 [![Contracts CI](https://github.com/joshuaodoh122-hub/stellarflow-checkout/actions/workflows/contracts.yml/badge.svg)](https://github.com/joshuaodoh122-hub/stellarflow-checkout/actions/workflows/contracts.yml)
