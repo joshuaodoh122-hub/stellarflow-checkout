@@ -26,7 +26,7 @@ import {
   Asset as StellarAsset,
   Memo,
   StrKey,
-} from 'stellar-sdk';
+} from '@stellar/stellar-sdk';
 import {
   sessionToSep0007Uri,
   renderQr,

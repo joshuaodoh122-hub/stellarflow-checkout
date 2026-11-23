@@ -31,14 +31,23 @@
  *
  * ## Soroban SDK note
  *
- * This file uses `stellar-sdk@12.3.0` which ships full Soroban support:
- * `SorobanRpc.Server`, `Contract`, `nativeToScVal`, `scValToNative`,
- * `assembleTransaction`. The legacy classic-payment code elsewhere in the
- * server also uses `stellar-sdk@12.x` — they coexist from the same package.
+ * This file uses `@stellar/stellar-sdk` which ships full Soroban support:
+ * `rpc.Server`, `Contract`, `nativeToScVal`, `scValToNative`,
+ * `rpc.assembleTransaction`. The legacy classic-payment code elsewhere in the
+ * server also uses `@stellar/stellar-sdk` — they coexist from the same package.
+ *
+ * ## Polling resilience
+ *
+ * `submitSignedTx` falls back to a raw JSON-RPC `getTransaction` call when the
+ * SDK's `rpc.getTransaction` throws (for example due to XDR parse errors in the
+ * SDK on new transaction-metadata formats). The raw fallback reads only
+ * `result.status` and never attempts XDR decoding. On timeout, the last error
+ * message is included in the `POLL_TIMEOUT` detail so callers can diagnose the
+ * root cause.
  */
 
 import {
-  SorobanRpc,
+  rpc as SorobanRpc,
   TransactionBuilder,
   Contract,
   nativeToScVal,
@@ -47,7 +56,7 @@ import {
   BASE_FEE,
   Account,
   Transaction,
-} from 'stellar-sdk';
+} from '@stellar/stellar-sdk';
 import { randomBytes } from 'crypto';
 import type { StellarNetwork } from '@stellarflow/core';
 
@@ -241,7 +250,7 @@ const POLL_TIMEOUT_MS = 30_000;
 const POLL_INTERVAL_MS = 1_500;
 
 /**
- * HTTP-based Soroban RPC client using stellar-sdk@12.x SorobanRpc.
+ * HTTP-based Soroban RPC client using @stellar/stellar-sdk rpc namespace.
  *
  * ## Non-custodial design
  *
@@ -258,9 +267,17 @@ const POLL_INTERVAL_MS = 1_500;
  * - Simulation with contract error  → EscrowClientError(code) — caller can catch
  * - sendTransaction rejection       → EscrowRpcError(SEND_FAILED)
  * - tx hash FAILED status           → EscrowRpcError(TX_FAILED)
- * - poll timeout                    → EscrowRpcError(POLL_TIMEOUT)
+ * - poll timeout                    → EscrowRpcError(POLL_TIMEOUT) with last error
  * - XDR parse failure               → EscrowRpcError(INVALID_XDR)
  * - Contract error code in XDR      → NOT extracted from tx result (see note below)
+ *
+ * ## Polling resilience
+ *
+ * When `rpc.getTransaction` throws (e.g. `Bad union switch: 4` from new XDR
+ * formats that the SDK cannot yet parse), the error is logged once and the
+ * poll falls back to a plain `fetch` POST to the same RPC URL. The raw
+ * fallback reads only `result.status` — it never decodes XDR. This ensures
+ * a SUCCESS confirmed on-chain is always recognised regardless of SDK version.
  *
  * NOTE on TX_FAILED error codes: Stellar SDK does not expose a simple API to extract
  * Soroban contract error codes from a failed transaction's result meta XDR.
@@ -271,8 +288,11 @@ const POLL_INTERVAL_MS = 1_500;
 export class HttpSorobanRpcClient implements SorobanRpcClient {
   private readonly rpc: SorobanRpc.Server;
   private readonly network: StellarNetwork;
+  /** Stored for the raw JSON-RPC fallback in submitSignedTx. */
+  private readonly rpcUrl: string;
 
   constructor(rpcUrl: string, network: StellarNetwork) {
+    this.rpcUrl = rpcUrl;
     this.rpc = new SorobanRpc.Server(rpcUrl, { allowHttp: rpcUrl.startsWith('http://') });
     this.network = network;
   }
@@ -413,6 +433,11 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
   /**
    * Submit a wallet-signed XDR and poll for result.
    *
+   * When the SDK's `rpc.getTransaction` throws (e.g. XDR parse errors from new
+   * transaction-metadata formats), the error is logged once and a raw JSON-RPC
+   * fallback reads `result.status` without decoding XDR. On timeout, the last
+   * error message is included in the POLL_TIMEOUT detail.
+   *
    * NOTE: TX_FAILED does not include a contract error code. The Stellar SDK
    * does not provide a simple path to extract Soroban error codes from the
    * result meta XDR of a submitted transaction. errorCode is always undefined
@@ -446,41 +471,97 @@ export class HttpSorobanRpcClient implements SorobanRpcClient {
     if (sendResult.status === 'ERROR') {
       throw new EscrowRpcError(
         'SEND_FAILED',
-        `sendTransaction rejected: ${sendResult.errorResult?.result().switch().name ?? 'unknown'}`,
+        `sendTransaction rejected: ${sendResult.errorResult?.result.type ?? 'unknown'}`,
       );
     }
 
     const txHash = sendResult.hash;
 
     const deadline = Date.now() + POLL_TIMEOUT_MS;
+    /** Most recent error seen from either getTransaction path; included in POLL_TIMEOUT. */
+    let lastError = '';
+    /** Distinct error messages already logged (avoid flooding logs). */
+    const loggedErrors = new Set<string>();
+
     while (Date.now() < deadline) {
       await new Promise<void>((r) => setTimeout(r, POLL_INTERVAL_MS));
 
-      let pollResult: SorobanRpc.Api.GetTransactionResponse;
+      // ── Primary path: SDK getTransaction ──────────────────────────────────
+      let sdkStatus: string | null = null;
       try {
-        pollResult = await this.rpc.getTransaction(txHash);
-      } catch {
+        const pollResult = await this.rpc.getTransaction(txHash);
+        sdkStatus = pollResult.status;
+      } catch (sdkErr) {
+        const msg = sdkErr instanceof Error ? sdkErr.message : String(sdkErr);
+        lastError = msg;
+        if (!loggedErrors.has(msg)) {
+          console.error(`[escrow] getTransaction failed: ${msg}`);
+          loggedErrors.add(msg);
+        }
+      }
+
+      if (sdkStatus !== null) {
+        if (sdkStatus === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+          return { txHash };
+        }
+        if (sdkStatus === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+          throw new EscrowRpcError('TX_FAILED', `Transaction ${txHash} failed on-chain`);
+        }
+        // NOT_FOUND — keep polling; no raw fallback needed
         continue;
       }
 
-      const status = pollResult.status;
-
-      if (status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-        return { txHash };
+      // ── Fallback path: raw JSON-RPC getTransaction ─────────────────────────
+      // The SDK threw (e.g. XDR parse error on new metadata formats). Read only
+      // `result.status` from the raw response — never decode XDR here.
+      try {
+        const raw = await this._rawGetTransactionStatus(txHash);
+        if (raw === 'SUCCESS') {
+          return { txHash };
+        }
+        if (raw === 'FAILED') {
+          throw new EscrowRpcError('TX_FAILED', `Transaction ${txHash} failed on-chain`);
+        }
+        // NOT_FOUND or null → keep polling
+      } catch (rawErr) {
+        if (rawErr instanceof EscrowRpcError) throw rawErr;
+        const msg = rawErr instanceof Error ? rawErr.message : String(rawErr);
+        lastError = msg;
+        if (!loggedErrors.has(msg)) {
+          console.error(`[escrow] raw getTransaction fallback failed: ${msg}`);
+          loggedErrors.add(msg);
+        }
       }
-
-      if (status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-        // Contract error code extraction from tx result XDR is not implemented.
-        // See module docblock note on TX_FAILED.
-        throw new EscrowRpcError('TX_FAILED', `Transaction ${txHash} failed on-chain`);
-      }
-      // NOT_FOUND = still pending, keep polling
     }
 
     throw new EscrowRpcError(
       'POLL_TIMEOUT',
-      `Transaction ${txHash} did not confirm within ${POLL_TIMEOUT_MS}ms`,
+      `Transaction ${txHash} did not confirm within ${POLL_TIMEOUT_MS}ms` +
+        (lastError ? `; last error: ${lastError}` : ''),
     );
+  }
+
+  /**
+   * Raw JSON-RPC getTransaction — reads only `result.status`, never decodes XDR.
+   * Used as a fallback when the SDK's getTransaction throws a parse error.
+   * Returns the status string ('SUCCESS', 'FAILED', 'NOT_FOUND') or null on error.
+   */
+  private async _rawGetTransactionStatus(txHash: string): Promise<string | null> {
+    const response = await fetch(this.rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'getTransaction',
+        params: { hash: txHash },
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(`Raw RPC HTTP ${response.status}`);
+    }
+    const data = await response.json() as { result?: { status?: string } };
+    return data?.result?.status ?? null;
   }
 
   // ─── invokeContract (scripts/tests only — NOT for HTTP handlers) ──────

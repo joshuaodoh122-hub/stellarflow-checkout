@@ -5,7 +5,7 @@
  * SessionManager → webhook events.
  *
  * These tests simulate the full SSE-to-webhook flow without any live network
- * calls. stellar-sdk's Horizon.Server is mocked at the module level so the
+ * calls. @stellar/stellar-sdk's Horizon.Server is mocked at the module level so the
  * listener's stream() callback can be invoked synchronously from tests.
  *
  * Gaps filled by this suite:
@@ -27,7 +27,7 @@ import { PaymentProcessor } from '../payment-processor';
 import { SessionManager, InMemorySessionStore } from '../session-manager';
 import type { WebhookEvent } from '../session-manager';
 import { InMemoryIdempotencyStore } from '@stellarflow/core';
-import type { Horizon } from 'stellar-sdk';
+import type { Horizon } from '@stellar/stellar-sdk';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -67,8 +67,8 @@ function buildStreamMock() {
 
 const streamFactory = { current: buildStreamMock() };
 
-jest.mock('stellar-sdk', () => {
-  const actual = jest.requireActual<typeof import('stellar-sdk')>('stellar-sdk');
+jest.mock('@stellar/stellar-sdk', () => {
+  const actual = jest.requireActual<typeof import('@stellar/stellar-sdk')>('@stellar/stellar-sdk');
   return {
     ...actual,
     Horizon: {

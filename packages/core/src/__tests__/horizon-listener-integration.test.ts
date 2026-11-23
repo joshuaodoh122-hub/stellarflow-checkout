@@ -2,7 +2,7 @@
  * horizon-listener-integration.test.ts 
  *
  * Tests for HorizonPaymentListener start/stop lifecycle, cursor restoration,
- * and SSE stream subscription behaviour. The stellar-sdk Horizon.Server is
+ * and SSE stream subscription behaviour. The @stellar/stellar-sdk Horizon.Server is
  * mocked at the module level so no network calls are made.
  *
  * Gaps filled by this suite (not covered in horizon-listener.test.ts):
@@ -18,7 +18,7 @@
  *   - Multiple sequential events processed in order with cursor advancing
  */
 
-import type { Horizon } from 'stellar-sdk';
+import type { Horizon } from '@stellar/stellar-sdk';
 import { HorizonPaymentListener, InMemoryCursorStore } from '../horizon-listener';
 import type { PaymentEvent } from '../types';
 
@@ -31,7 +31,7 @@ const TX_HASH = 'cafebabecafebabe1234567890abcdef1234567890abcdef1234567890abcde
 // ─── Minimal stream mock factory ──────────────────────────────────────────────
 
 /**
- * Builds a minimal mock of stellar-sdk's Horizon.Server that captures the
+ * Builds a minimal mock of @stellar/stellar-sdk's Horizon.Server that captures the
  * stream options so tests can invoke onmessage / onerror manually.
  */
 function buildServerMock() {
@@ -63,13 +63,13 @@ function buildServerMock() {
   };
 }
 
-// ─── Mock stellar-sdk Horizon.Server ─────────────────────────────────────────
+// ─── Mock @stellar/stellar-sdk Horizon.Server ─────────────────────────────────────────
 
 // Holder updated per-test so each test gets a fresh mock
 const serverFactory = { current: buildServerMock() };
 
-jest.mock('stellar-sdk', () => {
-  const actual = jest.requireActual<typeof import('stellar-sdk')>('stellar-sdk');
+jest.mock('@stellar/stellar-sdk', () => {
+  const actual = jest.requireActual<typeof import('@stellar/stellar-sdk')>('@stellar/stellar-sdk');
   return {
     ...actual,
     Horizon: {

@@ -31,7 +31,7 @@ import {
   Operation,
   Memo,
   Horizon as StellarHorizon,
-} from 'stellar-sdk';
+} from '@stellar/stellar-sdk';
 import type { CheckoutSession, StellarNetwork } from '@stellarflow/core';
 import { HORIZON_URLS, NETWORK_PASSPHRASES } from '@stellarflow/core';
 

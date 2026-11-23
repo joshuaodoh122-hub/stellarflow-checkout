@@ -3,7 +3,8 @@
  *
  * Unit tests for HttpSorobanRpcClient.
  *
- * SorobanRpc.Server is mocked at the module level — no real network calls.
+ * rpc.Server is mocked at the module level — no real network calls.
+ * global.fetch is mocked per-test where the raw JSON-RPC fallback is exercised.
  *
  * Verified behaviours:
  *   simulateContract:
@@ -27,6 +28,10 @@
  *     - FAILED  → throws EscrowRpcError(TX_FAILED)
  *     - SEND ERROR status → throws EscrowRpcError(SEND_FAILED)
  *     - polls through NOT_FOUND before SUCCESS
+ *     - SDK throws Bad union switch → raw fallback SUCCESS → returns { txHash }
+ *     - SDK throws Bad union switch → raw fallback FAILED → throws TX_FAILED
+ *     - raw fallback NOT_FOUND then SUCCESS → returns { txHash }
+ *     - both SDK and raw fallback keep failing → POLL_TIMEOUT with last error text
  *
  *   invokeContract:
  *     - returns { status:'failed', errorCode } when build throws EscrowClientError
@@ -45,12 +50,12 @@ import {
   ESCROW_ERROR_CODES,
 } from '../escrow-session';
 import {
-  SorobanRpc,
+  rpc as SorobanRpc,
   TransactionBuilder,
   Networks,
   Keypair,
   Account,
-} from 'stellar-sdk';
+} from '@stellar/stellar-sdk';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -103,7 +108,7 @@ function makeSendError(): SorobanRpc.Api.SendTransactionResponse {
     status: 'ERROR',
     latestLedger: 100,
     latestLedgerCloseTime: 1000,
-    errorResult: { result: () => ({ switch: () => ({ name: 'txFailed' }) }) },
+    errorResult: { result: { type: 'txFailed' } },
   } as unknown as SorobanRpc.Api.SendTransactionResponse;
 }
 
@@ -117,10 +122,18 @@ function makeGetTx(status: SorobanRpc.Api.GetTransactionStatus): SorobanRpc.Api.
   } as unknown as SorobanRpc.Api.GetTransactionResponse;
 }
 
+/** Build a mock fetch response for the raw JSON-RPC fallback. */
+function mockRawFetch(status: string): jest.Mock {
+  return jest.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({ result: { status } }),
+  });
+}
+
 // ─── Module-level mock ────────────────────────────────────────────────────────
 
 /**
- * Mock SorobanRpc.Server so every new HttpSorobanRpcClient gets the same
+ * Mock rpc.Server so every new HttpSorobanRpcClient gets the same
  * mockServerMethods object — no real HTTP calls are made.
  */
 const mockServerMethods = {
@@ -130,21 +143,21 @@ const mockServerMethods = {
   getTransaction: jest.fn(),
 };
 
-jest.mock('stellar-sdk', () => {
-  const actual = jest.requireActual<typeof import('stellar-sdk')>('stellar-sdk');
+jest.mock('@stellar/stellar-sdk', () => {
+  const actual = jest.requireActual<typeof import('@stellar/stellar-sdk')>('@stellar/stellar-sdk');
 
   // assembleTransaction is called after simulation to inject the footprint.
   // In tests we stub it to return a { build: () => tx } so no real XDR parsing happens.
   const assembleTransactionStub = jest.fn().mockImplementation(
-    (tx: import('stellar-sdk').Transaction) => ({
+    (tx: import('@stellar/stellar-sdk').Transaction) => ({
       build: () => tx,
     }),
   );
 
   return {
     ...actual,
-    SorobanRpc: {
-      ...actual.SorobanRpc,
+    rpc: {
+      ...actual.rpc,
       Server: jest.fn().mockImplementation(() => mockServerMethods),
       assembleTransaction: assembleTransactionStub,
     },
@@ -390,6 +403,105 @@ describe('HttpSorobanRpcClient.submitSignedTx()', () => {
     expect(result.txHash).toBe(TX_HASH);
     expect(mockServerMethods.getTransaction).toHaveBeenCalledTimes(3);
   }, 60_000);
+
+  // ── Raw JSON-RPC fallback tests ───────────────────────────────────────────
+
+  it('SDK throws Bad union switch → raw fallback SUCCESS → returns { txHash }', async () => {
+    jest.useFakeTimers();
+    const TX_HASH = 'badunionfallback'.padEnd(64, '0');
+    mockServerMethods.sendTransaction.mockResolvedValue(makeSendPending(TX_HASH));
+    mockServerMethods.getTransaction.mockRejectedValue(new Error('Bad union switch: 4'));
+    global.fetch = mockRawFetch('SUCCESS');
+
+    const promise = client.submitSignedTx({ signedXdr: buildMinimalXdr(), networkPassphrase: NETWORK_PASSPHRASE });
+    await jest.runAllTimersAsync();
+    const result = await promise;
+
+    expect(result.txHash).toBe(TX_HASH);
+    expect(global.fetch).toHaveBeenCalled();
+    jest.useRealTimers();
+  });
+
+  it('SDK throws Bad union switch → raw fallback FAILED → throws TX_FAILED', async () => {
+    jest.useFakeTimers();
+    const TX_HASH = 'badunionfailed'.padEnd(64, '0');
+    mockServerMethods.sendTransaction.mockResolvedValue(makeSendPending(TX_HASH));
+    mockServerMethods.getTransaction.mockRejectedValue(new Error('Bad union switch: 4'));
+    global.fetch = mockRawFetch('FAILED');
+
+    const promise = client.submitSignedTx({ signedXdr: buildMinimalXdr(), networkPassphrase: NETWORK_PASSPHRASE });
+    // Suppress the rejection until we assert on it; without this Jest treats it
+    // as an unhandled rejection before expect(promise).rejects can handle it.
+    promise.catch(() => {});
+    await jest.runAllTimersAsync();
+
+    await expect(promise).rejects.toMatchObject({ kind: 'TX_FAILED' });
+    jest.useRealTimers();
+  });
+
+  it('raw fallback NOT_FOUND then SUCCESS → returns { txHash }', async () => {
+    jest.useFakeTimers();
+    const TX_HASH = 'rawnotfound'.padEnd(64, '0');
+    mockServerMethods.sendTransaction.mockResolvedValue(makeSendPending(TX_HASH));
+    mockServerMethods.getTransaction.mockRejectedValue(new Error('Bad union switch: 4'));
+    // First call: NOT_FOUND; second call: SUCCESS
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ result: { status: 'NOT_FOUND' } }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ result: { status: 'SUCCESS' } }) });
+
+    const promise = client.submitSignedTx({ signedXdr: buildMinimalXdr(), networkPassphrase: NETWORK_PASSPHRASE });
+    await jest.runAllTimersAsync();
+    const result = await promise;
+
+    expect(result.txHash).toBe(TX_HASH);
+    jest.useRealTimers();
+  });
+
+  it('SDK throws transient ECONNRESET a few times then succeeds → returns { txHash } (primary path recovery)', async () => {
+    jest.useFakeTimers();
+    const TX_HASH = 'econnreset'.padEnd(64, '0');
+    mockServerMethods.sendTransaction.mockResolvedValue(makeSendPending(TX_HASH));
+    // The SDK's getTransaction throws a transient network error twice, then
+    // resolves SUCCESS. The raw fallback stays NOT_FOUND so the SDK path is the
+    // one that recovers — this proves transient SDK errors are tolerated and
+    // do not abort the poll loop.
+    mockServerMethods.getTransaction
+      .mockRejectedValueOnce(new Error('ECONNRESET'))
+      .mockRejectedValueOnce(new Error('ECONNRESET'))
+      .mockResolvedValueOnce(makeGetTx(SorobanRpc.Api.GetTransactionStatus.SUCCESS));
+    global.fetch = mockRawFetch('NOT_FOUND');
+
+    const promise = client.submitSignedTx({ signedXdr: buildMinimalXdr(), networkPassphrase: NETWORK_PASSPHRASE });
+    await jest.runAllTimersAsync();
+    const result = await promise;
+
+    expect(result.txHash).toBe(TX_HASH);
+    // SDK getTransaction was called 3 times: two ECONNRESET rejections then SUCCESS.
+    expect(mockServerMethods.getTransaction).toHaveBeenCalledTimes(3);
+    jest.useRealTimers();
+  });
+
+  it('SDK and raw fallback both keep failing → POLL_TIMEOUT with last error text', async () => {
+    jest.useFakeTimers();
+    const TX_HASH = 'timeout'.padEnd(64, '0');
+    mockServerMethods.sendTransaction.mockResolvedValue(makeSendPending(TX_HASH));
+    mockServerMethods.getTransaction.mockRejectedValue(new Error('Bad union switch: 4'));
+    global.fetch = jest.fn().mockRejectedValue(new Error('raw fetch failed'));
+
+    const promise = client.submitSignedTx({ signedXdr: buildMinimalXdr(), networkPassphrase: NETWORK_PASSPHRASE });
+    // Suppress the rejection until we assert on it; without this Jest treats it
+    // as an unhandled rejection before expect(promise).rejects can handle it.
+    promise.catch(() => {});
+    // Advance past the 30 s deadline
+    jest.advanceTimersByTime(31_000);
+    await jest.runAllTimersAsync();
+
+    await expect(promise).rejects.toMatchObject({
+      kind: 'POLL_TIMEOUT',
+      detail: expect.stringContaining('raw fetch failed'),
+    });
+    jest.useRealTimers();
+  });
 });
 
 // ─── invokeContract ───────────────────────────────────────────────────────────

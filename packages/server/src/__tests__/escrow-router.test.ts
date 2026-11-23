@@ -2,7 +2,7 @@
  * escrow-router.test.ts
  *
  * Supertest tests for the escrow checkout router.
- * Real Stellar transactions are built with stellar-sdk — no stubs for XDR paths.
+ * Real Stellar transactions are built with @stellar/stellar-sdk — no stubs for XDR paths.
  */
 
 import express from 'express';
@@ -10,7 +10,7 @@ import request from 'supertest';
 import {
   Keypair, Account, TransactionBuilder, Contract,
   nativeToScVal, Networks, BASE_FEE,
-} from 'stellar-sdk';
+} from '@stellar/stellar-sdk';
 import {
   createEscrowRouter,
   EscrowSessionStore,
@@ -62,7 +62,7 @@ interface DepositXdrParams {
 }
 
 /**
- * Build a real signed deposit transaction XDR using stellar-sdk.
+ * Build a real signed deposit transaction XDR using @stellar/stellar-sdk.
  * This creates an actual invokeHostFunction transaction that the router's
  * XDR validation code can parse and check.
  */

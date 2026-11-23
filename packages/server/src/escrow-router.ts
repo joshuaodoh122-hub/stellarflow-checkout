@@ -60,7 +60,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { timingSafeEqual } from 'crypto';
-import { TransactionBuilder, StrKey, scValToNative } from 'stellar-sdk';
+import { TransactionBuilder, StrKey, scValToNative } from '@stellar/stellar-sdk';
 import { NETWORK_PASSPHRASES } from '@stellarflow/core';
 import type { StellarNetwork } from '@stellarflow/core';
 import {
@@ -354,14 +354,14 @@ export function createEscrowRouter(opts: EscrowRouterOptions): Router {
       }
 
       // Parse XDR
-      let tx: import('stellar-sdk').Transaction;
+      let tx: import('@stellar/stellar-sdk').Transaction;
       try {
         const parsed = TransactionBuilder.fromXDR(signedDepositXdr, networkPassphrase);
         if (!('operations' in parsed)) {
           res.status(400).json({ error: 'FeeBump transactions are not accepted' });
           return;
         }
-        tx = parsed as import('stellar-sdk').Transaction;
+        tx = parsed as import('@stellar/stellar-sdk').Transaction;
       } catch {
         res.status(400).json({ error: 'Invalid transaction XDR' });
         return;
@@ -481,14 +481,14 @@ export function createEscrowRouter(opts: EscrowRouterOptions): Router {
       }
 
       // Parse and validate release XDR
-      let tx: import('stellar-sdk').Transaction;
+      let tx: import('@stellar/stellar-sdk').Transaction;
       try {
         const parsed = TransactionBuilder.fromXDR(signedReleaseXdr, networkPassphrase);
         if (!('operations' in parsed)) {
           res.status(400).json({ error: 'FeeBump transactions are not accepted' });
           return;
         }
-        tx = parsed as import('stellar-sdk').Transaction;
+        tx = parsed as import('@stellar/stellar-sdk').Transaction;
       } catch {
         res.status(400).json({ error: 'Invalid transaction XDR' });
         return;
@@ -601,14 +601,14 @@ export function createEscrowRouter(opts: EscrowRouterOptions): Router {
         return;
       }
 
-      let tx: import('stellar-sdk').Transaction;
+      let tx: import('@stellar/stellar-sdk').Transaction;
       try {
         const parsed = TransactionBuilder.fromXDR(signedRefundXdr, networkPassphrase);
         if (!('operations' in parsed)) {
           res.status(400).json({ error: 'FeeBump transactions are not accepted' });
           return;
         }
-        tx = parsed as import('stellar-sdk').Transaction;
+        tx = parsed as import('@stellar/stellar-sdk').Transaction;
       } catch {
         res.status(400).json({ error: 'Invalid transaction XDR' });
         return;
@@ -732,9 +732,14 @@ export function createEscrowRouter(opts: EscrowRouterOptions): Router {
 /**
  * Extract the invokeContract call from an invokeHostFunction operation.
  * Returns an error string if the operation is not a valid invokeContract call.
+ *
+ * @stellar/stellar-sdk@17 changed the operation object model: `func` is now a
+ * plain object with a `type` string property and an `invokeContract` property
+ * (not a method). `contractAddress`, `functionName`, and `args` are also plain
+ * properties, not methods. This function adapts to that new shape.
  */
 function extractInvokeContract(op: { type: string }): {
-  ic: { functionName: () => { toString: () => string }; args: () => unknown[] };
+  ic: { functionName: { toString(): string }; args: unknown[] };
   contractAddress: string;
 } | { error: string } {
   if (op.type !== 'invokeHostFunction') {
@@ -743,33 +748,46 @@ function extractInvokeContract(op: { type: string }): {
 
   const opAny = op as {
     func?: {
-      switch: () => { name: string };
-      invokeContract?: () => {
-        contractAddress: () => { contractId: () => Buffer };
-        functionName: () => { toString: () => string };
-        args: () => unknown[];
+      type?: string;
+      invokeContract?: {
+        contractAddress?: {
+          contractId?: { value: Uint8Array };
+        };
+        functionName?: { toString(): string };
+        args?: unknown[];
       };
     };
   };
 
-  const funcSwitch = opAny.func?.switch()?.name;
-  if (funcSwitch !== 'hostFunctionTypeInvokeContract') {
-    return { error: `HostFunction type must be invokeContract, got ${funcSwitch ?? 'unknown'}` };
+  const funcType = opAny.func?.type;
+  if (funcType !== 'hostFunctionTypeInvokeContract') {
+    return { error: `HostFunction type must be invokeContract, got ${funcType ?? 'unknown'}` };
   }
 
-  const ic = opAny.func?.invokeContract?.();
+  const ic = opAny.func?.invokeContract;
   if (!ic) {
     return { error: 'Cannot access invokeContract from operation' };
   }
 
   let contractAddress: string;
   try {
-    contractAddress = StrKey.encodeContract(ic.contractAddress().contractId());
+    const contractIdBytes = ic.contractAddress?.contractId?.value;
+    if (!contractIdBytes) {
+      return { error: 'Cannot read contract address bytes from operation' };
+    }
+    contractAddress = StrKey.encodeContract(contractIdBytes);
   } catch (e) {
     return { error: `Cannot decode contract address: ${String(e)}` };
   }
 
-  return { ic, contractAddress };
+  const functionName = ic.functionName;
+  const args = ic.args ?? [];
+
+  if (!functionName) {
+    return { error: 'Cannot read function name from operation' };
+  }
+
+  return { ic: { functionName, args }, contractAddress };
 }
 
 /**
@@ -790,7 +808,7 @@ function extractInvokeContract(op: { type: string }): {
  * 12. arg[5] timeout  == session.requestedTimeoutLedgers (exact)
  */
 function validateDepositArgs(
-  tx: import('stellar-sdk').Transaction,
+  tx: import('@stellar/stellar-sdk').Transaction,
   session: EscrowCheckoutSession,
   _networkPassphrase: string,
 ): string | null {
@@ -818,13 +836,13 @@ function validateDepositArgs(
     return `Contract address mismatch: expected ${session.contractId}, got ${contractAddress}`;
   }
 
-  const methodName = ic.functionName().toString();
+  const methodName = ic.functionName.toString();
   if (methodName !== 'deposit') {
     return `Expected method "deposit", got "${methodName}"`;
   }
 
   // Decode and validate each argument positionally
-  const rawArgs = ic.args();
+  const rawArgs = ic.args;
   if (rawArgs.length !== 6) {
     return `Expected 6 deposit arguments, got ${rawArgs.length}`;
   }
@@ -859,6 +877,8 @@ function validateDepositArgs(
   let actualBytes: Buffer;
   if (Buffer.isBuffer(argOrderId)) {
     actualBytes = argOrderId;
+  } else if (argOrderId instanceof Uint8Array) {
+    actualBytes = Buffer.from(argOrderId);
   } else if (argOrderId && typeof argOrderId === 'object' && 'data' in argOrderId) {
     actualBytes = Buffer.from((argOrderId as { data: number[] }).data);
   } else {
@@ -882,7 +902,7 @@ function validateDepositArgs(
  * method == "release", arg[0] == session.orderId, tx.source == session.merchantAddress
  */
 function validateReleaseArgs(
-  tx: import('stellar-sdk').Transaction,
+  tx: import('@stellar/stellar-sdk').Transaction,
   session: EscrowCheckoutSession,
   _networkPassphrase: string,
 ): string | null {
@@ -904,12 +924,12 @@ function validateReleaseArgs(
     return `Contract address mismatch: expected ${session.contractId}, got ${contractAddress}`;
   }
 
-  const methodName = ic.functionName().toString();
+  const methodName = ic.functionName.toString();
   if (methodName !== 'release') {
     return `Expected method "release", got "${methodName}"`;
   }
 
-  const rawArgs = ic.args();
+  const rawArgs = ic.args;
   if (rawArgs.length !== 1) {
     return `Expected 1 release argument, got ${rawArgs.length}`;
   }
@@ -919,6 +939,8 @@ function validateReleaseArgs(
   let actualBytes: Buffer;
   if (Buffer.isBuffer(argOrderId)) {
     actualBytes = argOrderId;
+  } else if (argOrderId instanceof Uint8Array) {
+    actualBytes = Buffer.from(argOrderId);
   } else if (argOrderId && typeof argOrderId === 'object' && 'data' in argOrderId) {
     actualBytes = Buffer.from((argOrderId as { data: number[] }).data);
   } else {
@@ -937,7 +959,7 @@ function validateReleaseArgs(
  * tx.source == callerAddress
  */
 function validateRefundArgs(
-  tx: import('stellar-sdk').Transaction,
+  tx: import('@stellar/stellar-sdk').Transaction,
   session: EscrowCheckoutSession,
   callerAddress: string,
   _networkPassphrase: string,
@@ -960,12 +982,12 @@ function validateRefundArgs(
     return `Contract address mismatch: expected ${session.contractId}, got ${contractAddress}`;
   }
 
-  const methodName = ic.functionName().toString();
+  const methodName = ic.functionName.toString();
   if (methodName !== 'refund') {
     return `Expected method "refund", got "${methodName}"`;
   }
 
-  const rawArgs = ic.args();
+  const rawArgs = ic.args;
   if (rawArgs.length !== 2) {
     return `Expected 2 refund arguments, got ${rawArgs.length}`;
   }
@@ -975,6 +997,8 @@ function validateRefundArgs(
   let actualBytes: Buffer;
   if (Buffer.isBuffer(argOrderId)) {
     actualBytes = argOrderId;
+  } else if (argOrderId instanceof Uint8Array) {
+    actualBytes = Buffer.from(argOrderId);
   } else if (argOrderId && typeof argOrderId === 'object' && 'data' in argOrderId) {
     actualBytes = Buffer.from((argOrderId as { data: number[] }).data);
   } else {

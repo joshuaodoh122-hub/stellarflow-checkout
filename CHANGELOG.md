@@ -12,6 +12,188 @@ checklist.
 
 ## [Unreleased]
 
+### 2026-11-23 — fix/rpc-poll-and-sdk-upgrade (Task 3: upgrade the Stellar SDK)
+
+**Changes:**
+- Replaced the deprecated `stellar-sdk@12.3.0` with the maintained
+  `@stellar/stellar-sdk@17.4.0` in every workspace `package.json` and the
+  lockfile. Updated all imports and the namespace: `SorobanRpc` → `rpc as
+  SorobanRpc`, `SorobanRpc.Server` → `rpc.Server`,
+  `SorobanRpc.assembleTransaction` → `rpc.assembleTransaction`, and every
+  `jest.mock('stellar-sdk', …)` target to `'@stellar/stellar-sdk'`.
+- `packages/server/src/escrow-router.ts`: adapted `extractInvokeContract` and
+  the SEND_FAILED error read to `@stellar/stellar-sdk@17`'s plain-object
+  operation model — `func.type` (was `func.switch().name`),
+  `invokeContract` is a property not a method,
+  `contractAddress.contractId.value` is a `Uint8Array` (was a `Buffer` via a
+  method), and `errorResult.result.type` (was `errorResult.result().switch().name`).
+  Added `Uint8Array` handling for order-id args.
+- Jest infrastructure for `@stellar/stellar-sdk@17`'s ESM-only transitive
+  deps (`uint8array-extras`, `@exodus/bytes`, `@noble/*`, `eventsource`): new
+  `babel.config.js`, new `jest-shims/` CJS shims, and rewritten
+  `packages/{core,server}/jest.config.js` (`rootDir` = workspace root,
+  `transformIgnorePatterns`, `moduleNameMapper`, `babel-jest` for `.js`).
+  Added `packages/server/src/__tests__/sdk-load-test.test.ts` (sanity: SDK loads).
+- Node requirement: `@stellar/stellar-sdk@17.4.0` declares
+  `engines.node ">=22.12.0"`, so `engines` is now `>=22.12.0` in the root and
+  every workspace `package.json`, and `.nvmrc` is `22`. The CI matrix
+  (`.github/workflows/ci.yml`) is now `[22.x]` (was `[18.x, 20.x]`, both below
+  the new floor); the coverage-upload condition moved from `20.x` to `22.x`.
+- The SDK upgrade and the Task 2 polling fix ship in one commit: the SDK's
+  response-shape change (`errorResult.result.type`) and the raw-fallback
+  polling both modify `submitSignedTx` and its test mock, so they cannot be
+  split into independently-green commits without reverting hunks.
+
+**Why:** `stellar-sdk@12.3.0` cannot parse current testnet transaction
+metadata (`Bad union switch: 4`); the maintained package is now
+`@stellar/stellar-sdk`. `@stellar/stellar-sdk@17.4.0` requires Node
+`>=22.12.0`, which moved the floor up from 18.
+
+**Live checks (run 2026-11-23 against `https://soroban-testnet.stellar.org`):**
+1. Reproduce one-liner adapted to the new package/namespace:
+   `node -e "const {rpc}=require('@stellar/stellar-sdk');new rpc.Server('https://soroban-testnet.stellar.org').getTransaction('f750064c91f2671fd4ee0646d9cc4171f0694846bf54789cb6b3c6d57d2bc6bc').then(r=>console.log('STATUS',r.status)).catch(e=>console.log('ERR',e.message))"`
+   Real output: `STATUS SUCCESS`. (With the old `stellar-sdk@12.3.0` this
+   printed `ERR Bad union switch: 4`.)
+2. Live `simulateTransaction` of `get_escrow` for a random 32-byte order id
+   against the deployed contract
+   `CAEWW3XEBPQB2QIOWFZS6A2FRJR4Y6E75BWJYUEQQITO7Q4BT5KPODNB` (run via a
+   temporary CJS script using `@stellar/stellar-sdk`; the script was not
+   committed). Real output: `sim.status: undefined`,
+   `sim.error: "HostError: Error(Contract, #2)"` — a clean `NotFound` (code 2)
+   contract error, not a parse error.
+
+**Tests:**
+```
+npm run typecheck          ✅ exit 0 (run 2026-11-23, Node v24.22.2)
+npm run lint               ✅ exit 0 (run 2026-11-23)
+npm test -- --forceExit     ✅ 372 passed, 17 suites (run 2026-11-23)
+npm ci                      ✅ exit 0 from a clean node_modules (run 2026-11-23)
+npx jest packages/server/src/__tests__/sdk-load-test.test.ts \
+  packages/server/src/__tests__/http-soroban-rpc-client.test.ts   ✅ 34 passed
+```
+
+**Limits:** The live checks are read-only (a `getTransaction` query and a
+`simulateTransaction`); neither submits a signed transaction or moves funds.
+The full deposit/release/refund demo flow is run by the user
+(`scripts/escrow-testnet-demo.ts`). The new SDK's Node floor (`>=22.12.0`)
+was confirmed from the package's own `engines` field; CI was not executed
+here (matrix updated in Task 4). `npm ci` reported pre-existing transitive
+vulnerability/install-script warnings (`@reown/appkit`, `esbuild`,
+`secp256k1`) that are unrelated to this change and were not introduced by it.
+
+---
+
+### 2026-11-23 — fix/rpc-poll-and-sdk-upgrade (Task 2: fix the polling)
+
+**Changes:**
+- `packages/server/src/escrow-session.ts` `submitSignedTx`: removed the blanket
+  `catch { continue; }`. When `rpc.getTransaction` throws, the error message
+  is recorded and logged once with the prefix `[escrow] getTransaction failed:`,
+  then a raw JSON-RPC `getTransaction` fallback (plain `fetch` POST to the
+  configured Soroban RPC URL) reads only `result.status` — it never decodes
+  XDR. `SUCCESS` → return the hash; `FAILED` → throw `EscrowRpcError(TX_FAILED)`;
+  `NOT_FOUND` → keep polling. If both paths keep failing until the 30 s
+  deadline, throw `EscrowRpcError(POLL_TIMEOUT)` whose `detail` includes the
+  last error text (not a bare timeout).
+- Added private `_rawGetTransactionStatus(txHash)` and stored `rpcUrl` on the
+  client. Public types and error codes (`EscrowRpcError`, `EscrowRpcErrorKind`)
+  are unchanged.
+- Pattern search of `packages/server/src/**` and `packages/core/src/**` for
+  the same `catch { continue / return-default }` pattern around RPC/Horizon
+  calls. Verdicts (no other confirmation-masking occurrence found):
+  - `escrow-session.ts` `simulateContract`/`buildUnsignedContractTx`
+    `catch (e) { throw EscrowRpcError(NETWORK_ERROR) }` — **justified** (throws).
+  - `escrow-session.ts` `submitSignedTx` XDR parse — **justified** (throws
+    `INVALID_XDR`).
+  - `escrow-session.ts` `invokeContract` build/signer/submit catches —
+    **justified** (re-throw non-contract/non-TX_FAILED).
+  - `escrow-router.ts` GET reconcile `catch (rpcErr)` around `getEscrow`
+    (`simulateContract`): NotFound → null, else `console.warn` + keep status
+    — **justified** (read path; logs; preserves session status; does not mask a
+    confirmation). Optional follow-up: surface a non-NotFound read error in
+    `reconcileError` so callers can distinguish "not deposited" from "read failed".
+  - `escrow-router.ts`/`checkout-router.ts` `fromXDR` `catch { 400 }` and the
+    `handleEscrowError`/outer HTTP-error catches — **justified** (XDR validation
+    / HTTP error response, not silent-continue).
+  - `escrow-router.ts` `decodeScVal` `catch { return undefined }` —
+    **justified** (XDR decode fallback; undefined caught by downstream
+    validation; not an RPC call).
+  - `tx-builder.ts` `fetchRecommendedFee` `catch { return DEFAULT_FEE_STROOPS }`
+    around `server.feeStats()` — **justified** (non-critical fee estimate;
+    documented default; not a confirmation mask).
+  - `checkout-router.ts` `submitTransaction` `catch (horizonErr) { rollback;
+    throw }` — **justified** (re-throws).
+  - `core/horizon-listener.ts` memo follow-up `catch { // non-fatal }` around
+    the Horizon `transaction()` read — **justified** (optional memo enrichment;
+    payment event still emitted). Optional follow-up: log the failure once.
+  - `core/horizon-listener.ts` cursor-store `.catch(() => reconnect)` and
+    `FileCursorStore.load` `catch (ENOENT → null; else throw)` — **justified**
+    (resilience / file read; not RPC).
+
+**Why:** On testnet, deposit `f750064c91f2671fd4ee0646d9cc4171f0694846bf54789cb6b3c6d57d2bc6bc`
+was confirmed `SUCCESS` on-chain, but `POST /api/escrow/:id/submit` returned
+504 `POLL_TIMEOUT` after 30 s: `stellar-sdk@12.3.0` threw
+`Bad union switch: 4` parsing the newer transaction-metadata format, and the
+blanket `catch { continue; }` treated every parse error as "still pending".
+The raw fallback recognises a confirmed transaction even when the SDK cannot
+parse its metadata, and the last-error-in-timeout makes the failure
+diagnosable instead of a bare timeout.
+
+**Tests:**
+```
+npx jest packages/server/src/__tests__/http-soroban-rpc-client.test.ts --forceExit
+  ✅ 32 passed (run 2026-11-23), incl. the 5 new fallback/recovery tests:
+      - SDK throws Bad union switch → raw fallback SUCCESS → returns { txHash }
+      - SDK throws Bad union switch → raw fallback FAILED → throws TX_FAILED
+      - raw fallback NOT_FOUND then SUCCESS → returns { txHash }
+      - SDK throws transient ECONNRESET a few times then succeeds → returns { txHash }
+      - SDK and raw fallback both keep failing → POLL_TIMEOUT with last error text
+npm test -- --forceExit   ✅ 372 passed, 17 suites (run 2026-11-23)
+```
+
+**Limits:** Tests mock `rpc.Server` and `global.fetch`; no real network. They
+prove the polling logic, not end-to-end submission (the live check in Task 3
+covers the real network). `TX_FAILED` still does not surface a contract error
+code (SDK limitation, unchanged). The raw fallback reads only `result.status`;
+it does not parse the transaction envelope or result meta.
+
+---
+
+### 2026-11-23 — fix/rpc-poll-and-sdk-upgrade (Task 1: failing test first)
+
+**Changes:**
+- Added 5 tests in
+  `packages/server/src/__tests__/http-soroban-rpc-client.test.ts` for
+  `submitSignedTx` polling resilience (red before the Task 2 fix, green with
+  it):
+  1. `SDK throws Bad union switch → raw fallback SUCCESS → returns { txHash }`
+  2. `SDK throws Bad union switch → raw fallback FAILED → throws TX_FAILED`
+  3. `raw fallback NOT_FOUND then SUCCESS → returns { txHash }`
+  4. `SDK throws transient ECONNRESET a few times then succeeds → returns { txHash } (primary path recovery)`
+  5. `SDK and raw fallback both keep failing → POLL_TIMEOUT with last error text`
+- The fallback tests use Jest fake timers and mock `global.fetch` for the raw
+  JSON-RPC fallback. The transient-recovery test mocks the SDK
+  `getTransaction` to reject twice with `ECONNRESET` then resolve `SUCCESS`,
+  with the raw fallback returning `NOT_FOUND` so the SDK path is the one that
+  recovers.
+
+**Why:** The previous `submitSignedTx` had a blanket `catch { continue; }`
+around `rpc.getTransaction` that silently treated parse errors (e.g.
+`Bad union switch: 4`) as "still pending", so a confirmed transaction was
+reported as a 504 `POLL_TIMEOUT`. These tests pin the required behaviour
+before the fix is applied.
+
+**Tests:** Committed together with the Task 2 fix (no red commit pushed).
+```
+npx jest packages/server/src/__tests__/http-soroban-rpc-client.test.ts --forceExit
+  ✅ 32 passed (run 2026-11-23)
+```
+
+**Limits:** Tests mock `rpc.Server` and `global.fetch`; they do not exercise a
+real network. They prove the polling logic, not end-to-end submission.
+
+---
+
 ### 2026-11-22 — docs/honest-docs-and-claims-audit (Task 8: changelog hygiene)
 
 **Changes:**

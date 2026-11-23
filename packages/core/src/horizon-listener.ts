@@ -8,7 +8,7 @@
  * backoff automatically.
  *
  * Design notes:
- *   - Uses stellar-sdk's Server.payments().stream() which wraps Horizon's
+ *   - Uses @stellar/stellar-sdk's Server.payments().stream() which wraps Horizon's
  *     Server-Sent Events endpoint.
  *   - Deduplication of already-seen tx hashes happens in matchPayment()
  *     (memo-matcher.ts), NOT here. The listener's job is purely to parse
@@ -25,7 +25,7 @@
  *   - FileCursorStore persists the cursor to a local file. Pass one to
  *     HorizonPaymentListener when you need durability across restarts.
  *
- * stellar-sdk v12 type notes:
+ * @stellar/stellar-sdk type notes:
  *   OperationResponseType enum values:
  *     payment                  → 'payment'
  *     pathPayment              → 'path_payment_strict_receive'
@@ -41,7 +41,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { Horizon } from 'stellar-sdk';
+import { Horizon } from '@stellar/stellar-sdk';
 import type { PaymentEvent, Asset, StellarNetwork } from './types';
 import { HORIZON_URLS } from './types';
 
