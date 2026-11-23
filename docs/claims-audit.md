@@ -47,7 +47,7 @@ The test-name column uses backticks for every name that `scripts/check_claims.sh
 | SDK XDR parse error (Bad union switch) → raw fallback reads status → SUCCESS returned | README.md § Known limitations #7 | `escrow-session.ts` `submitSignedTx` | `SDK throws Bad union switch → raw fallback SUCCESS → returns { txHash }` | VERIFIED |
 | SDK XDR parse error → raw fallback reads status → FAILED throws TX_FAILED | README.md § Known limitations #7 | `escrow-session.ts` `submitSignedTx` | `SDK throws Bad union switch → raw fallback FAILED → throws TX_FAILED` | VERIFIED |
 | Both SDK and raw fallback failing → POLL_TIMEOUT with last error text | README.md § Known limitations #7 | `escrow-session.ts` `submitSignedTx` | `SDK and raw fallback both keep failing → POLL_TIMEOUT with last error text` | VERIFIED |
-| Live read-only testnet checks pass (getTransaction SUCCESS; simulateTransaction getEscrow NotFound) | README.md § Known limitations #6 | — (manual live checks against testnet; not unit tests) | Run 2026-11-23 against the deployed testnet contract; real output recorded in CHANGELOG.md Task 3 | REWORDED |
+| Live testnet run completed: deposit/release (Order A) and deposit/refund (Order B) confirmed on-chain 2026-11-23 | README.md § Verified on Stellar testnet / § Known limitations #6 | — (live testnet run; not a unit test) | Full terminal output and all tx hashes in docs/testnet-proof.md, run 2026-11-23 | REWORDED |
 | Status decoding tested with real SDK-built shapes | README.md § Known limitations #8 | `escrow-session.ts` `_decodeEscrowRecord` | `decodes Held status from scvVec(["Held"]) to EscrowRecord.status = "Held"` | VERIFIED |
 | Released status decoded from scvVec(["Released"]) | README.md § Known limitations #8 | `escrow-session.ts` `_decodeEscrowRecord` | `decodes Released status from scvVec(["Released"]) to EscrowRecord.status = "Released"` | VERIFIED |
 | Refunded status decoded from scvVec(["Refunded"]) | README.md § Known limitations #8 | `escrow-session.ts` `_decodeEscrowRecord` | `decodes Refunded status from scvVec(["Refunded"]) to EscrowRecord.status = "Refunded"` | VERIFIED |
@@ -154,6 +154,25 @@ The test-name column uses backticks for every name that `scripts/check_claims.sh
 2. **`/api/sessions` SESSIONS_API_KEY guard** — the guard exists in `checkout-router.ts` and is straightforward code, but the Jest tests for the checkout router do not exercise key-on/key-off for the sessions route directly. The README wording says "when `SESSIONS_API_KEY` is set" which is accurate. Status REWORDED to remove any implied stronger assertion.
 
 3. **"Unaudited"** — this is a negative structural claim (no audit has been performed). There is no automated test for the absence of an audit.
+
+---
+
+## Live evidence (not test-backed)
+
+The rows below record facts from the 2026-11-23 live testnet run. They are not in the
+checked table above because they cannot be backed by an automated test — each is a
+one-time on-chain event. `scripts/check_claims.sh` does not parse this section
+(the table has 3 columns / 4 pipe characters per row, below the script's threshold of 5).
+
+| Claim | Evidence | Date |
+|-------|----------|------|
+| Contract deployed to testnet with ID `CAEWW3XEBPQB2QIOWFZS6A2FRJR4Y6E75BWJYUEQQITO7Q4BT5KPODNB` | Upload tx `aac2ad1312f53f09c2a5acc83f1ff28dceab3e8c902efeb012c5e0c4201c15ea`, create tx `8a615b1811720764bbb95d9d3f04a536e4a3a1b719ee314072f46d155acc6719` / [docs/testnet-proof.md](testnet-proof.md) | 2026-11-23 |
+| Order A deposit confirmed on-chain: order `047d1b5ea53543645755eb45076217fdd32712c851c8baa0378dd408604bad42` | Tx `b6f03fef022a9f271fbb45234a8a5c3dc5622a639ece62b993a5fac36a531178` / [stellar.expert](https://stellar.expert/explorer/testnet/tx/b6f03fef022a9f271fbb45234a8a5c3dc5622a639ece62b993a5fac36a531178) | 2026-11-23 |
+| Order A release confirmed on-chain: order `047d1b5ea53543645755eb45076217fdd32712c851c8baa0378dd408604bad42` | Tx `82b0b39b1ae1df736dfc8855d133186720a18af601f638982e3fadcdc1024796` / [stellar.expert](https://stellar.expert/explorer/testnet/tx/82b0b39b1ae1df736dfc8855d133186720a18af601f638982e3fadcdc1024796) | 2026-11-23 |
+| Order B deposit confirmed on-chain: order `b93e3435a05138a35501c15494839e7e9f7dbd7057e2d0b950ad6313a727696f` | Tx `d6c8d8c674b0328722b387008e8fd84cf4b4cc43acd34e0016f1f56549fb94cf` / [stellar.expert](https://stellar.expert/explorer/testnet/tx/d6c8d8c674b0328722b387008e8fd84cf4b4cc43acd34e0016f1f56549fb94cf) | 2026-11-23 |
+| Order B refund confirmed on-chain: order `b93e3435a05138a35501c15494839e7e9f7dbd7057e2d0b950ad6313a727696f` | Tx `053d09407d2791cba27321d88c770bb92709ac7b45366e8e546e2dcdbaac373c` / [stellar.expert](https://stellar.expert/explorer/testnet/tx/053d09407d2791cba27321d88c770bb92709ac7b45366e8e546e2dcdbaac373c) | 2026-11-23 |
+| Wrong-merchant deposit rejected HTTP 400 before chain submission: order `99bff4da5147b8db529858f55d2d089b68bc08f8e76016c377e34ed5b04b055a` | Server response logged in [docs/testnet-proof.md](testnet-proof.md) terminal output | 2026-11-23 |
+| WASM SHA-256 `a74369ff5b2f3ea1782edda28d0374113545639a255e51a2a3bdac38fc19ccc1`, 13038 bytes, 5 exported functions | Build from commit `487b672`; recorded in [docs/testnet-proof.md](testnet-proof.md) | 2026-11-23 |
 
 ---
 

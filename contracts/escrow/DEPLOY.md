@@ -140,19 +140,21 @@ stellar contract deploy \
 
 ---
 
-## 7. No live testnet deployment yet
+## 7. Live testnet deployment — 2026-11-23
 
-**A testnet instance is deployed; live read-only checks pass.** An instance of the
-escrow contract is deployed on Stellar testnet and responds to live read-only calls —
-`getTransaction` for a real confirmed testnet hash returns `SUCCESS` (verifying
-`@stellar/stellar-sdk` parses current testnet responses), and `simulateTransaction`
-of `get_escrow` for a random order id returns a clean `NotFound` (code 2). See README
-§ Known limitations #6. The contract has been built and tested locally (35 Rust tests,
-`cargo test --locked`; 372 TS tests, `npm test -- --forceExit`, 2026-11-23), and the CI
-workflow is configured to build and test it on every push. The full signed-transaction
-end-to-end demo (`scripts/escrow-testnet-demo.ts`, deposit → release/refund with funded
-accounts) has not been run by the repo; run it following the steps in this document and
-record the real output in `docs/testnet-proof.md`.
+**A testnet instance was deployed and the full signed-transaction demo was run successfully on 2026-11-23.**
 
-Do not fabricate contract IDs or claim a live deployment that has not actually been
-verified — see `docs/testnet-proof.md` which is currently marked NOT YET RUN.
+| Field | Value |
+|-------|-------|
+| Contract ID | `CAEWW3XEBPQB2QIOWFZS6A2FRJR4Y6E75BWJYUEQQITO7Q4BT5KPODNB` |
+| WASM SHA-256 | `a74369ff5b2f3ea1782edda28d0374113545639a255e51a2a3bdac38fc19ccc1` |
+| Upload tx | `aac2ad1312f53f09c2a5acc83f1ff28dceab3e8c902efeb012c5e0c4201c15ea` |
+| Create tx | `8a615b1811720764bbb95d9d3f04a536e4a3a1b719ee314072f46d155acc6719` |
+
+The deposit/release and deposit/refund flows both confirmed on-chain. The timeout-based
+payer refund, `extend_escrow_ttl`, event inspection, non-XLM tokens, and mainnet were
+not covered by this run.
+
+See [`docs/testnet-proof.md`](../../docs/testnet-proof.md) for the full terminal output,
+all transaction hashes, order IDs, and a description of two bugs found and fixed earlier
+the same day before this successful run.

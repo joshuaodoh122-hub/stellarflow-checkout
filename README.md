@@ -25,6 +25,65 @@ StellarFlow supports two independent checkout modes. They can run on the same se
 
 ---
 
+## Verified on Stellar testnet
+
+The full deposit → release and deposit → refund flows were run against a live Stellar testnet contract on 2026-11-23. All four transactions confirmed on-chain.
+
+| Field | Value |
+|-------|-------|
+| Contract ID | `CAEWW3XEBPQB2QIOWFZS6A2FRJR4Y6E75BWJYUEQQITO7Q4BT5KPODNB` |
+| WASM SHA-256 | `a74369ff5b2f3ea1782edda28d0374113545639a255e51a2a3bdac38fc19ccc1` |
+| Run date | 2026-11-23 |
+| Token | native XLM SAC `CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC` |
+
+**Transactions (Stellar testnet):**
+
+| Flow | Tx hash | Link |
+|------|---------|------|
+| Order A deposit | `b6f03fef022a9f271fbb45234a8a5c3dc5622a639ece62b993a5fac36a531178` | [view](https://stellar.expert/explorer/testnet/tx/b6f03fef022a9f271fbb45234a8a5c3dc5622a639ece62b993a5fac36a531178) |
+| Order A release | `82b0b39b1ae1df736dfc8855d133186720a18af601f638982e3fadcdc1024796` | [view](https://stellar.expert/explorer/testnet/tx/82b0b39b1ae1df736dfc8855d133186720a18af601f638982e3fadcdc1024796) |
+| Order B deposit | `d6c8d8c674b0328722b387008e8fd84cf4b4cc43acd34e0016f1f56549fb94cf` | [view](https://stellar.expert/explorer/testnet/tx/d6c8d8c674b0328722b387008e8fd84cf4b4cc43acd34e0016f1f56549fb94cf) |
+| Order B refund | `053d09407d2791cba27321d88c770bb92709ac7b45366e8e546e2dcdbaac373c` | [view](https://stellar.expert/explorer/testnet/tx/053d09407d2791cba27321d88c770bb92709ac7b45366e8e546e2dcdbaac373c) |
+
+**What this proves:** the full server HTTP lifecycle (deposit, on-chain confirmation, release, refund) works against a real Soroban contract; the 13-argument XDR validation rejects a wrong-merchant deposit with HTTP 400 before anything reaches chain; the `scValToNative` status shape `["Held"]` is decoded correctly end-to-end.
+
+**What this does NOT prove:** the timeout-based payer refund path, `extend_escrow_ttl`, event contents on-chain, any token other than native XLM, mainnet, load, or any security audit.
+
+See [`docs/testnet-proof.md`](docs/testnet-proof.md) for the full terminal output, order IDs, build commands, and a detailed account of two bugs found and fixed earlier the same day.
+
+**To reproduce:**
+
+```bash
+# 1. Install stellar-cli 30.0.1
+curl -L https://github.com/stellar/stellar-cli/releases/download/v30.0.1/stellar-cli-30.0.1-x86_64-unknown-linux-gnu.tar.gz \
+  -o stellar-cli.tar.gz && tar xzf stellar-cli.tar.gz && sudo mv stellar /usr/local/bin/stellar
+
+# 2. Build the contract
+stellar contract build
+# → target/wasm32v1-none/release/stellarflow_escrow.wasm
+
+# 3. Deploy to testnet
+stellar contract deploy \
+  --wasm target/wasm32v1-none/release/stellarflow_escrow.wasm \
+  --source <funded-identity> \
+  --network testnet
+
+# 4. Configure environment
+export ESCROW_CONTRACT_ID=<contract-id-from-step-3>
+export SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
+export STELLAR_NETWORK=testnet
+
+# 5. Start the demo server
+cd packages/demo
+ESCROW_CONTRACT_ID=$ESCROW_CONTRACT_ID SOROBAN_RPC_URL=$SOROBAN_RPC_URL npm run dev &
+
+# 6. Run the proof script
+cd ../..
+npx ts-node scripts/escrow-testnet-demo.ts
+```
+
+---
+
 ## Soroban escrow — honest status (v0.2)
 
 **What is built and tested:**
@@ -37,7 +96,7 @@ StellarFlow supports two independent checkout modes. They can run on the same se
 | Deposit XDR: full 6-arg validation (payer/merchant/amount/token/order_id/timeout) | ✅ one test per arg | `escrow-router.test.ts` |
 | Post-confirmation on-chain record verification | ✅ mismatch test | `escrow-router.test.ts` |
 | Testnet proof script | ✅ written, typechecks | `scripts/escrow-testnet-demo.ts` |
-| Live testnet run | ⏳ **Not yet run** — requires a deployed contract + funded accounts | See below |
+| Live testnet run | ✅ **Run 2026-11-23** — deposit/release (Order A) and deposit/refund (Order B) confirmed on-chain | See [Verified on Stellar testnet](#verified-on-stellar-testnet) above and [`docs/testnet-proof.md`](docs/testnet-proof.md) |
 
 Counts are not hard-coded per component to avoid staleness. As of 2026-11-23 the
 suite was **35 Rust contract tests** (`cargo test --locked` in `contracts/escrow`)
@@ -58,13 +117,6 @@ every push/PR touching `contracts/**`:
 - `cargo build --locked --target wasm32v1-none --release` (WASM build, artifact uploaded)
 
 using Rust stable with the `wasm32v1-none` target and stellar-cli v28.1.0.
-
-**What "not yet run" means:** The TypeScript integration is complete and the
-contract compiles and passes its unit tests in CI. Neither has been run against
-a live testnet yet — that requires a deployed contract and funded accounts. The
-testnet proof script (`scripts/escrow-testnet-demo.ts`) is ready to run once a
-contract is deployed; its results are not yet recorded (see
-[`docs/testnet-proof.md`](docs/testnet-proof.md)).
 
 ---
 
@@ -107,7 +159,7 @@ After the deposit transaction confirms on-chain, `getEscrow()` is called and the
 - No third-party arbitration — if merchant claims fulfilment and payer disagrees, payer must wait for timeout
 - Single token per order — one SAC token contract per escrow
 - Session store is in-memory — server restart loses escrow session state (same limitation as classic checkout)
-- The contract is exercised in CI (fmt, clippy, tests, WASM build — see the Contracts CI badge above). Live **read-only** testnet checks pass against a deployed instance (see limitation #6); the full signed-transaction demo (`scripts/escrow-testnet-demo.ts`) is not run by CI
+- The contract is exercised in CI (fmt, clippy, tests, WASM build — see the Contracts CI badge above). The full signed-transaction demo (`scripts/escrow-testnet-demo.ts`) is not run by CI — it requires funded accounts and a live testnet deployment. It was run manually on 2026-11-23; see [`docs/testnet-proof.md`](docs/testnet-proof.md).
 
 **Soroban SDK note:** This integration uses `@stellar/stellar-sdk@^17.4.0` which ships full Soroban support (`rpc.Server`, `Contract`, `nativeToScVal`, `scValToNative`, `rpc.assembleTransaction`). The package is listed as a dependency of `@stellarflow/core` and all server and script imports use this package.
 
@@ -166,36 +218,40 @@ Truthfully, from the code (see [SECURITY.md](SECURITY.md) for the full design):
 
 ## How to run the testnet proof
 
-```bash
-# 1. Install the Stellar CLI
-# https://developers.stellar.org/docs/tools/stellar-cli
+The proof was run on 2026-11-23 and is recorded in [`docs/testnet-proof.md`](docs/testnet-proof.md). To reproduce it:
 
-# 2. Deploy the escrow contract to testnet
-cd contracts/escrow
-# Direct `cargo build` of soroban-sdk needs this env var (or use `stellar contract build`):
-SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=true \
-  cargo build --locked --target wasm32v1-none --release
+```bash
+# 1. Install stellar-cli 30.0.1 (the version used for the recorded run)
+curl -L https://github.com/stellar/stellar-cli/releases/download/v30.0.1/stellar-cli-30.0.1-x86_64-unknown-linux-gnu.tar.gz \
+  -o stellar-cli.tar.gz && tar xzf stellar-cli.tar.gz && sudo mv stellar /usr/local/bin/stellar
+
+# 2. Build the contract (stellar contract build handles wasm32v1-none automatically)
+stellar contract build
+# → target/wasm32v1-none/release/stellarflow_escrow.wasm  (13038 bytes as of commit 487b672)
+
+# 3. Deploy to testnet
 stellar contract deploy \
   --wasm target/wasm32v1-none/release/stellarflow_escrow.wasm \
-  --network testnet \
-  --source <your-funded-account>
-# Note the contract address (C...)
+  --source <your-funded-identity> \
+  --network testnet
+# Note the contract ID printed (C...)
 
-# 3. Configure environment
-export ESCROW_CONTRACT_ID=CXXX...   # from step 2
+# 4. Configure environment
+export ESCROW_CONTRACT_ID=<contract-id-from-step-3>
 export SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
 export STELLAR_NETWORK=testnet
 
-# 4. Start the demo server
+# 5. Start the demo server
 cd packages/demo
-npm run dev &
+ESCROW_CONTRACT_ID=$ESCROW_CONTRACT_ID SOROBAN_RPC_URL=$SOROBAN_RPC_URL npm run dev &
+# Wait for: [server] Listening on port 3000
 
-# 5. Run the testnet proof script
+# 6. Run the testnet proof script
 cd ../..
 npx ts-node scripts/escrow-testnet-demo.ts
 ```
 
-The script will print every transaction hash and links to stellar.expert for verification.
+The script funds throwaway testnet accounts via Friendbot, runs the negative check, Order A (deposit → release), and Order B (deposit → refund), and prints every transaction hash with Stellar Expert links.
 
 ---
 
@@ -504,18 +560,17 @@ cd packages/server && npm test
    `expiresAt` need a manual query to resolve. A background sweep is a documented
    stretch goal.
 
-6. **Soroban escrow: unit-tested against mocks; live read-only checks done.** The server
-   validates every XDR argument and verifies the on-chain record after confirmation
-   (against a mock). As of 2026-11-23 there were 143 escrow TypeScript tests across
+6. **Soroban escrow: live testnet run completed 2026-11-23.** The server
+   validates every XDR argument and verifies the on-chain record after confirmation.
+   As of 2026-11-23 there were 143 escrow TypeScript tests across
    3 suites (`npm test`; see the CI badge for current totals) and 35 Rust contract
-   tests run in CI (`cargo test --locked`). Live **read-only** checks were run against
-   the deployed testnet contract on 2026-11-23: `getTransaction` for a real confirmed
-   testnet hash returns `SUCCESS` (verifying `@stellar/stellar-sdk` parses current
-   testnet responses), and `simulateTransaction` of `get_escrow` for a random order id
-   returns a clean `NotFound` contract error (code 2). The full deposit/release/refund
-   flow (signed transactions) has **not** been run against a live testnet — that
-   requires a funded account and submitting a signed transaction. See the [Soroban escrow — honest status](#soroban-escrow--honest-status-v02)
-   section above.
+   tests run in CI (`cargo test --locked`). The full deposit/release/refund
+   flow was run against the live testnet on 2026-11-23: Order A (deposit → release)
+   and Order B (deposit → merchant voluntary refund) both confirmed on-chain against
+   contract `CAEWW3XEBPQB2QIOWFZS6A2FRJR4Y6E75BWJYUEQQITO7Q4BT5KPODNB`. The
+   timeout-based payer refund, `extend_escrow_ttl`, event inspection, non-XLM tokens,
+   and mainnet were not covered. See [`docs/testnet-proof.md`](docs/testnet-proof.md)
+   and the [Verified on Stellar testnet](#verified-on-stellar-testnet) section above.
 
 7. **Confirmation polling falls back to raw RPC status on SDK parse errors.** When the
    SDK's `getTransaction` throws (for example due to XDR metadata formats it cannot parse),
@@ -537,7 +592,7 @@ cd packages/server && npm test
 
 | Version | Feature |
 |---|---|
-| v0.2 | Soroban escrow checkout (built & unit-tested against mocks; live read-only testnet checks pass; full signed-tx demo not run by CI) |
+| v0.2 | Soroban escrow checkout (built, unit-tested, and live testnet run completed 2026-11-23; see [docs/testnet-proof.md](docs/testnet-proof.md)) |
 | v0.2 (future) | Escrow: partial releases/refunds (all-or-nothing in current version) |
 | v0.2 (future) | Escrow: third-party arbitration (no arbiter role in current version) |
 | v0.3 | Reflector on-chain price oracle (`ReflectorPriceSource` via `PriceSource` interface) |

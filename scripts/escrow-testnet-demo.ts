@@ -49,7 +49,8 @@
  *   # 3. Run
  *   npx ts-node scripts/escrow-testnet-demo.ts
  *
- * ⚠️  LIVE RUN STATUS: NOT YET RUN — see docs/testnet-proof.md for proof log.
+ * ⚠️  LIVE RUN STATUS: Run successfully on 2026-11-23 — see docs/testnet-proof.md for the
+ *     full terminal output, all transaction hashes, and what was and was not covered.
  */
 
 import fetch from 'node-fetch';

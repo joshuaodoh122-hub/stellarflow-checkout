@@ -12,6 +12,106 @@ checklist.
 
 ## [Unreleased]
 
+### 2026-11-23 — docs/testnet-verification (Task 5: changelog entries)
+
+**Changes:**
+- Added four dated CHANGELOG entries (Tasks 1–4) for the testnet verification work.
+
+**Why:** Every task requires a changelog entry per the project rules.
+
+**Tests/verification:**
+```
+npm run lint       ✅ exit 0
+npm run typecheck  ✅ exit 0
+npm test           ✅ 395 passed, 18 suites
+bash scripts/check_claims.sh  ✅ 93 rows, all OK
+```
+
+**Limits:** A single run on one day (2026-11-23); throwaway testnet accounts; native XLM only. CHANGELOG entries are not independently verified by CI — they are human-written summaries.
+
+---
+
+### 2026-11-23 — docs/testnet-verification (Task 4: claims-audit live evidence)
+
+**Changes:**
+- `docs/claims-audit.md`: added a "Live evidence (not test-backed)" section with a 3-column table (claim, evidence, date) for the 7 on-chain facts from the 2026-11-23 testnet run. The table uses only 4 pipes per row so `check_claims.sh` ignores it (the script's threshold is 5+ pipes). Updated the "live read-only testnet checks" row to reflect the full signed-transaction run.
+
+**Why:** The testnet run produced real on-chain evidence (contract ID, 4 transaction hashes, WASM hash, negative-check result, order IDs) that the claims audit must reference. These cannot be backed by automated tests — they are live events — so they go in a separate section rather than the checked table.
+
+**Tests/verification:**
+```
+bash scripts/check_claims.sh  ✅ 93 rows, all OK (unchanged from before this task)
+npm run lint       ✅ exit 0
+npm run typecheck  ✅ exit 0
+npm test           ✅ 395 passed, 18 suites
+```
+
+**Limits:** A single run on one day (2026-11-23); throwaway testnet accounts; native XLM only. The check_claims.sh count (93) is unchanged, confirming the new table is not parsed.
+
+---
+
+### 2026-11-23 — docs/testnet-verification (Task 3: demo script header)
+
+**Changes:**
+- `scripts/escrow-testnet-demo.ts`: updated the header comment `LIVE RUN STATUS: NOT YET RUN` to `Run successfully on 2026-11-23` with a link to `docs/testnet-proof.md`. No behaviour change.
+
+**Why:** The script's header is the first thing a reader sees. Leaving it marked "NOT YET RUN" after a successful run would be misleading.
+
+**Tests/verification:**
+```
+npm run typecheck  ✅ exit 0 (comment-only change; no logic altered)
+npm run lint       ✅ exit 0
+npm test           ✅ 395 passed, 18 suites
+```
+
+**Limits:** A single run on one day (2026-11-23); throwaway testnet accounts; native XLM only. The script itself is unchanged beyond the comment.
+
+---
+
+### 2026-11-23 — docs/testnet-verification (Task 2: README and status updates)
+
+**Changes:**
+- `README.md`: added "Verified on Stellar testnet" section near the top with contract ID `CAEWW3XEBPQB2QIOWFZS6A2FRJR4Y6E75BWJYUEQQITO7Q4BT5KPODNB`, WASM hash, date, all four transaction hashes with Stellar Expert links, what was proved, what was not proved, and how to reproduce.
+- `README.md` status table: updated "Live testnet run" row from `⏳ Not yet run` to `✅ Run 2026-11-23`.
+- `README.md` Known limitations #6: replaced the "read-only checks only" paragraph with the real run status and a pointer to `docs/testnet-proof.md`.
+- `README.md` Remaining limitations: updated the "full signed-transaction demo not run by CI" note to reflect the manual run.
+- `README.md` Roadmap v0.2 row: updated from "unit-tested against mocks; full signed-tx demo not run" to "live testnet run completed 2026-11-23".
+- `README.md` How to run the testnet proof: replaced placeholder commands with the exact commands used in the successful run (stellar-cli 30.0.1, `stellar contract build`, correct env vars, `ESCROW_CONTRACT_ID` passed to the demo server).
+- `contracts/escrow/DEPLOY.md` section 7: replaced "No live testnet deployment yet" with the real contract ID, WASM hash, deploy transaction hashes, and what was and was not covered.
+
+**Why:** Multiple files contained "NOT YET RUN" or "not yet run" language that was no longer accurate after the 2026-11-23 run. These needed to be updated to the real status while keeping the NOT-covered list visible.
+
+**Tests/verification:**
+```
+npm run lint       ✅ exit 0
+npm run typecheck  ✅ exit 0
+npm test           ✅ 395 passed, 18 suites
+bash scripts/check_claims.sh  ✅ 93 rows, all OK
+```
+
+**Limits:** A single run on one day (2026-11-23); throwaway testnet accounts funded by Friendbot; native XLM SAC only. The timeout-based payer refund, `extend_escrow_ttl`, event inspection, non-XLM tokens, mainnet, load, and security audit were not covered. This environment could not reach the Stellar testnet to re-verify transaction hashes via RPC; hashes are copied from the live run terminal output.
+
+---
+
+### 2026-11-23 — docs/testnet-verification (Task 1: testnet-proof.md)
+
+**Changes:**
+- `docs/testnet-proof.md`: replaced "NOT YET RUN" placeholder with the real results from the 2026-11-23 live run. Added: run date, network, Soroban RPC URL, contract ID and explorer link, WASM file/size/hash/exported functions/build command/commit, deploy transaction table with Stellar Expert links, corrected prerequisites (stellar-cli 30.0.1 instead of 28.1.0), corrected commands (uses `stellar contract build` not bare `cargo build`; demo server started with `ESCROW_CONTRACT_ID` env var), full unedited terminal output in a code block, accounts table (payer/merchant/wrong-merchant addresses), token and amount, full transaction table (negative check + Orders A and B), "What this proves" section, "What this does NOT prove" section (timeout refund, `extend_escrow_ttl`, event contents, non-XLM tokens, mainnet, load, audit), and the "problems found by live runs" paragraph covering PRs #33 and #34.
+
+**Why:** The file existed as a placeholder with no real data. The live run produced the data to fill it.
+
+**Tests/verification:**
+```
+npm run lint       ✅ exit 0
+npm run typecheck  ✅ exit 0
+npm test           ✅ 395 passed, 18 suites
+bash scripts/check_claims.sh  ✅ 93 rows, all OK
+```
+
+**Limits:** A single run on one day (2026-11-23); throwaway testnet accounts funded by Friendbot; native XLM SAC (`CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC`) only; 1 XLM (10000000 stroops). The timeout-based payer refund, `extend_escrow_ttl`, event inspection, non-XLM tokens, mainnet, load, and security audit were not covered. This environment could not reach the Stellar testnet to re-verify transaction hashes via RPC; hashes are copied from the live run terminal output.
+
+---
+
 ### 2026-11-23 — fix/escrow-status-decoding (Task 4: docs and claims)
 
 **Changes:**
