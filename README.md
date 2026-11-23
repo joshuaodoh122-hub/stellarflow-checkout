@@ -524,6 +524,13 @@ cd packages/server && npm test
    is included in the `POLL_TIMEOUT` detail if the deadline expires before a final status
    is reached.
 
+8. **Status decoding is covered by tests built from real SDK values.** `_decodeEscrowRecord`
+   is tested with inputs constructed using `xdr`, `nativeToScVal`, and `scValToNative` from
+   the installed `@stellar/stellar-sdk` — not hand-written mock objects — so the shapes
+   tested are the same shapes the real Soroban contract returns. A SDK sanity suite pins
+   the `scValToNative` output shapes (vec, i128, address, u32, bytes); a future SDK upgrade
+   that changes those shapes will fail the sanity suite before the decoder breaks silently.
+
 ---
 
 ## Roadmap

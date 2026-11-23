@@ -12,6 +12,39 @@ checklist.
 
 ## [Unreleased]
 
+### 2026-11-23 — fix/escrow-status-decoding (Task 4: docs and claims)
+
+**Changes:**
+- `README.md` Known limitations: added limitation #8 — status decoding is
+  covered by tests built from real SDK values (`xdr`, `nativeToScVal`,
+  `scValToNative`); a SDK sanity suite pins the `scValToNative` output shapes
+  so a future SDK upgrade that changes them fails there before the decoder
+  breaks silently.
+- `docs/claims-audit.md`: added 9 new VERIFIED rows and updated "Last updated"
+  to 2026-11-23. The 9 rows cite the new tests in `escrow-status-decoding.test.ts`:
+  Held/Released/Refunded decode, two invalid-shape tests, one SDK sanity
+  assertion, and the full `EscrowClient.getEscrow` path.
+- `bash scripts/check_claims.sh` now passes 93 rows (was 85).
+
+**Why:** The fix and tests in Tasks 1–3 introduced new, testable behaviour claims
+(status decoding from real SDK shapes) that needed to be reflected in the claims
+audit so they remain traceable after future changes.
+
+**Tests:**
+```
+bash scripts/check_claims.sh   ✅ 93 rows, all OK (run 2026-11-23)
+npm run lint                   ✅ exit 0
+npm run typecheck              ✅ exit 0
+npm test -- --forceExit        ✅ 395 passed, 18 suites (run 2026-11-23)
+```
+Rust: **NOT RUN** — `cargo` not installed; contract not modified.
+
+**Limits:** The claims check verifies test names exist in test files; it does not
+run the tests. The 395/18 count should be re-checked against the CI badge for the
+running totals.
+
+---
+
 ### 2026-11-23 — fix/escrow-status-decoding (Tasks 1–3: status decode fix, pattern audit)
 
 **Changes:**
